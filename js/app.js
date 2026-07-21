@@ -1,1519 +1,844 @@
-// ===============================
-// SMART CART DATABASE ENGINE
-// Version 1.0
-// ===============================
-
+/* SmartCart shared runtime: IndexedDB cache, offline queue, auth and local features. */
 const DB_NAME = "SmartCartDB";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
+const DEMO_BARCODES = new Set(["111111", "222222", "333333", "999999"]);
+const DEMO_TRIPS = new Set(["trip001", "trip002", "trip003"]);
+const pesoFormatter = new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" });
 
-let db;
+let db = null;
+let authSession = null;
+let syncInFlight = null;
+let syncSubscription = null;
+let resolveDbReady;
+const dbReady = new Promise((resolve) => { resolveDbReady = resolve; });
+const cartChannel = "BroadcastChannel" in window ? new BroadcastChannel("smartcart") : null;
 
-// ===============================
-// REAL-TIME TAB SYNCHRONIZATION
-// ===============================
-
-const cartChannel =
-new BroadcastChannel("smartcart");
-
-function broadcastCartUpdate(){
-
-    cartChannel.postMessage({
-
-        type:"cart-updated",
-
-        time:Date.now()
-
-    });
-
+function formatPHP(value) {
+    const numeric = Number(value);
+    return pesoFormatter.format(Number.isFinite(numeric) ? numeric : 0);
 }
 
-let dbReadyResolve;
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
 
-const dbReady =
-
-new Promise(resolve => {
-
-    dbReadyResolve = resolve;
-
-});
-
-
-// ===============================
-// OPEN DATABASE
-// ===============================
-
-const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-request.onerror = (event) => {
-    console.error("Database Error:", event.target.error);
-};
-
-request.onsuccess = (event) => {
-    db = event.target.result;
-    dbReadyResolve();
-
-    console.log("Database Connected");
-
-    seedSampleData();
-    loadDashboard();
-};
-
-request.onupgradeneeded = (event) => {
-
-    db = event.target.result;
-
-    // Products Store
-    if (!db.objectStoreNames.contains("products")) {
-
-        const productsStore =
-            db.createObjectStore("products", {
-                keyPath: "barcode"
-            });
-
-        productsStore.createIndex(
-            "name",
-            "name",
-            { unique: false }
-        );
+function showToast(message, type = "info") {
+    let toast = document.querySelector("[data-toast]");
+    if (!toast) {
+        toast = document.createElement("div");
+        toast.dataset.toast = "";
+        toast.setAttribute("role", "status");
+        toast.setAttribute("aria-live", "polite");
+        document.body.appendChild(toast);
     }
-
-    // Trips Store
-    if (!db.objectStoreNames.contains("trips")) {
-
-        db.createObjectStore("trips", {
-            keyPath: "tripId"
-        });
-    }
-
-    // Trip Items Store
-    if (!db.objectStoreNames.contains("tripItems")) {
-
-        db.createObjectStore("tripItems", {
-            keyPath: "id",
-            autoIncrement: true
-        });
-    }
-
-    if(
-    !db.objectStoreNames.contains(
-        "budget"
-    )
-){
-
-    db.createObjectStore(
-        "budget",
-        {
-            keyPath: "id"
-        }
-    );
-
+    toast.textContent = message;
+    toast.dataset.type = type;
+    toast.classList.add("is-visible");
+    clearTimeout(showToast.timer);
+    showToast.timer = window.setTimeout(() => toast.classList.remove("is-visible"), 3600);
 }
 
-
-
-// Price History Store
-if (!db.objectStoreNames.contains("priceHistory")) {
-
-    db.createObjectStore(
-        "priceHistory",
-        {
-            keyPath: "id",
-            autoIncrement: true
-        }
-    );
-}
-
-if (!db.objectStoreNames.contains("cart")) {
-
-    db.createObjectStore(
-        "cart",
-        {
-            keyPath: "id",
-            autoIncrement: true
-        }
-    );
-}
-    }
-
-    console.log("Database Created");
-
-    
-
-// ===============================
-// SAMPLE DATA
-// ===============================
-
-function seedSampleData() {
-
-    const tx = db.transaction("products", "readonly");
-    const store = tx.objectStore("products");
-
-    const countRequest = store.count();
-
-    countRequest.onsuccess = () => {
-
-        if (countRequest.result > 0) {
-            return;
-        }
-
-        console.log("Adding sample data");
-
-        const tx2 =
-            db.transaction(
-                ["products", "trips"],
-                "readwrite"
-            );
-
-        const products =
-            tx2.objectStore("products");
-
-        const trips =
-            tx2.objectStore("trips");
-
-        products.add({
-            barcode: "111111",
-            name: "Milk",
-            category: "Dairy",
-            lastPrice: 4.50
-        });
-
-        products.add({
-            barcode: "222222",
-            name: "Eggs",
-            category: "Dairy",
-            lastPrice: 3.80
-        });
-
-        products.add({
-            barcode: "333333",
-            name: "Bread",
-            category: "Bakery",
-            lastPrice: 2.20
-        });
-
-        trips.add({
-            tripId: "trip001",
-            date: "2026-06-01",
-            total: 212
-        });
-
-        trips.add({
-            tripId: "trip002",
-            date: "2026-05-15",
-            total: 476
-        });
-
-        trips.add({
-            tripId: "trip003",
-            date: "2026-04-22",
-            total: 520
-        });
-
-    };
-}
-
-// ===============================
-// LOAD DASHBOARD
-// ===============================
-
-function loadDashboard() {
-
-    loadProductCount();
-    loadRecentTrips();
-}
-
-// ===============================
-// PRODUCT COUNT
-// ===============================
-
-function loadProductCount() {
-
-    const tx =
-        db.transaction("products", "readonly");
-
-    const store =
-        tx.objectStore("products");
-
-    const countRequest =
-        store.count();
-
-    countRequest.onsuccess = () => {
-
-        console.log(
-            "Products:",
-            countRequest.result
-        );
-    };
-}
-
-// ===============================
-// RECENT TRIPS
-// ===============================
-
-function loadRecentTrips() {
-
-    const tx =
-        db.transaction("trips", "readonly");
-
-    const store =
-        tx.objectStore("trips");
-
-    const request =
-        store.getAll();
-
-    request.onsuccess = () => {
-
-        const trips =
-            request.result;
-
-        console.log("Trips:", trips);
-
-        const listItems =
-            document.querySelectorAll(
-                ".list-item"
-            );
-
-        trips.forEach((trip, index) => {
-
-            if (!listItems[index]) return;
-
-            listItems[index].innerHTML = `
-                <span>${trip.date}</span>
-                <span>$${trip.total}</span>
-            `;
-        });
-    };
-}
-
-// ===============================
-// ADD PRODUCT
-// ===============================
-
-function addProduct(product){
-
-    return new Promise((resolve,reject)=>{
-
-        const tx =
-            db.transaction(
-                ["products","priceHistory"],
-                "readwrite"
-            );
-
-        const productsStore =
-            tx.objectStore(
-                "products"
-            );
-
-        const historyStore =
-            tx.objectStore(
-                "priceHistory"
-            );
-
-        const request =
-            productsStore.get(
-                product.barcode
-            );
-
-        request.onsuccess = ()=>{
-
-            const existing =
-                request.result;
-
-            if(existing){
-
-                if(
-                    existing.lastPrice !=
-                    product.lastPrice
-                ){
-
-                    const change =
-
-                        (
-                            (
-                                product.lastPrice -
-                                existing.lastPrice
-                            )
-
-                            /
-
-                            existing.lastPrice
-
-                        ) * 100;
-
-                    historyStore.add({
-
-                        barcode:
-                            product.barcode,
-
-                        name:
-                            product.name,
-
-                        oldPrice:
-                            existing.lastPrice,
-
-                        newPrice:
-                            product.lastPrice,
-
-                        change:
-                            change,
-
-                        date:
-                            new Date()
-                            .toISOString()
-
-                    });
-
-                    console.log(
-                        "Price Change Saved"
-                    );
-                }
-
-                productsStore.put(
-                    product
-                );
-            }
-
-            else{
-
-                productsStore.add(
-                    product
-                );
-            }
-
-            resolve(product);
+function confirmAction(message, title = "Please confirm") {
+    return new Promise((resolve) => {
+        const dialog = document.createElement("div");
+        dialog.className = "confirm-dialog";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-modal", "true");
+        dialog.innerHTML = `
+            <div class="confirm-dialog__body">
+                <h2>${escapeHtml(title)}</h2>
+                <p>${escapeHtml(message)}</p>
+                <div class="button-row">
+                    <button data-confirm="cancel" class="button button-secondary" type="button">Cancel</button>
+                    <button data-confirm="confirm" class="button button-danger" type="button">Continue</button>
+                </div>
+            </div>`;
+        document.body.appendChild(dialog);
+        const finish = (accepted) => {
+            resolve(accepted);
+            dialog.remove();
         };
-
-        request.onerror =
-            reject;
+        dialog.querySelector('[data-confirm="cancel"]').addEventListener("click", () => finish(false), { once: true });
+        dialog.querySelector('[data-confirm="confirm"]').addEventListener("click", () => finish(true), { once: true });
     });
 }
 
+function validateBarcode(value) {
+    const barcode = String(value ?? "").trim();
+    return /^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(barcode) ? barcode : null;
+}
 
+function validateScan(scan) {
+    const barcode = validateBarcode(scan.barcode);
+    const price = Number(scan.price);
+    const errors = [];
+    if (!barcode) errors.push("Barcode must contain exactly 8, 12, 13, or 14 digits.");
+    if (!String(scan.name ?? "").trim()) errors.push("Product name is required.");
+    if (!String(scan.category ?? "").trim()) errors.push("Category is required.");
+    if (!Number.isFinite(price) || price <= 0) errors.push("Price must be greater than zero.");
+    if (!String(scan.retailer ?? "").trim()) errors.push("Retailer is required.");
+    if (!String(scan.branch ?? "").trim()) errors.push("Branch is required.");
+    return { valid: errors.length === 0, errors, barcode, price };
+}
 
+function newLocalId(prefix = "scan") {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
-
-
-
-
-// ===============================
-// FIND PRODUCT
-// ===============================
-
-function findProduct(barcode) {
-
+function requestPromise(request) {
     return new Promise((resolve, reject) => {
-
-        const tx =
-            db.transaction(
-                "products",
-                "readonly"
-            );
-
-        const store =
-            tx.objectStore("products");
-
-        const request =
-            store.get(barcode);
-
-        request.onsuccess = () => {
-            resolve(request.result);
-        };
-
-        request.onerror = () => {
-            reject(null);
-        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error("IndexedDB request failed"));
     });
 }
 
-// ===============================
-// SAVE TRIP
-// ===============================
-
-function saveTrip(trip) {
-
-    const tx =
-        db.transaction(
-            "trips",
-            "readwrite"
-        );
-
-    const store =
-        tx.objectStore("trips");
-
-    store.put(trip);
+function transactionPromise(transaction) {
+    return new Promise((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error || new Error("IndexedDB transaction failed"));
+        transaction.onabort = () => reject(transaction.error || new Error("IndexedDB transaction aborted"));
+    });
 }
 
-// ===============================
-// SAVE PRICE HISTORY
-// ===============================
-
-function savePriceHistory(data) {
-
-    const tx =
-        db.transaction(
-            "priceHistory",
-            "readwrite"
-        );
-
-    const store =
-        tx.objectStore(
-            "priceHistory"
-        );
-
-    store.add(data);
+function readAll(storeName) {
+    return dbReady.then(() => requestPromise(db.transaction(storeName, "readonly").objectStore(storeName).getAll()));
 }
 
-async function checkoutCart(){
+function normalizeProduct(product) {
+    return {
+        ...product,
+        barcode: String(product.barcode ?? "").trim(),
+        name: String(product.name ?? "").trim(),
+        brand: String(product.brand ?? "").trim(),
+        category: String(product.category ?? "").trim(),
+        size: String(product.size ?? "").trim(),
+        unit: String(product.unit ?? "").trim(),
+        lastPrice: Number(product.lastPrice ?? product.price),
+        lastRetailer: String(product.lastRetailer ?? product.retailer ?? "").trim(),
+        lastBranch: String(product.lastBranch ?? product.branch ?? "").trim(),
+        lastPriceAt: product.lastPriceAt ?? product.updatedAt ?? new Date().toISOString(),
+        createdAt: product.createdAt ?? new Date().toISOString(),
+        updatedAt: product.updatedAt ?? new Date().toISOString()
+    };
+}
 
-    const cartItems =
-        await getCartItems();
+function broadcast(type = "data-updated") {
+    cartChannel?.postMessage({ type, time: Date.now() });
+}
 
-    if(cartItems.length === 0){
+async function removeLegacyDemoData() {
+    const products = await readAll("products");
+    const trips = await readAll("trips");
+    const demoProductBarcodes = products.filter((product) => DEMO_BARCODES.has(String(product.barcode))).map((product) => product.barcode);
+    const demoTripIds = trips.filter((trip) => DEMO_TRIPS.has(String(trip.tripId))).map((trip) => trip.tripId);
+    if (!demoProductBarcodes.length && !demoTripIds.length) return;
+    const stores = [];
+    if (demoProductBarcodes.length) stores.push("products", "priceHistory", "pendingScans");
+    if (demoTripIds.length) stores.push("trips", "tripItems");
+    const transaction = db.transaction([...new Set(stores)], "readwrite");
+    if (demoProductBarcodes.length) {
+        const productStore = transaction.objectStore("products");
+        const historyStore = transaction.objectStore("priceHistory");
+        const pendingStore = transaction.objectStore("pendingScans");
+        const [history, pending] = await Promise.all([
+            requestPromise(historyStore.getAll()),
+            requestPromise(pendingStore.getAll())
+        ]);
+        demoProductBarcodes.forEach((barcode) => productStore.delete(barcode));
+        history.filter((row) => demoProductBarcodes.includes(row.barcode)).forEach((row) => historyStore.delete(row.id));
+        pending.filter((row) => demoProductBarcodes.includes(row.barcode)).forEach((row) => pendingStore.delete(row.localId));
+    }
+    if (demoTripIds.length) {
+        const tripStore = transaction.objectStore("trips");
+        const itemStore = transaction.objectStore("tripItems");
+        const items = await requestPromise(itemStore.getAll());
+        demoTripIds.forEach((tripId) => tripStore.delete(tripId));
+        items.filter((item) => demoTripIds.includes(item.tripId)).forEach((item) => itemStore.delete(item.id));
+    }
+    await transactionPromise(transaction);
+}
 
-        alert("Cart Empty");
+function openDatabase() {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (event) => {
+        const database = event.target.result;
+        if (!database.objectStoreNames.contains("products")) {
+            const products = database.createObjectStore("products", { keyPath: "barcode" });
+            products.createIndex("name", "name", { unique: false });
+        }
+        if (!database.objectStoreNames.contains("trips")) database.createObjectStore("trips", { keyPath: "tripId" });
+        if (!database.objectStoreNames.contains("tripItems")) database.createObjectStore("tripItems", { keyPath: "id", autoIncrement: true });
+        if (!database.objectStoreNames.contains("budget")) database.createObjectStore("budget", { keyPath: "id" });
+        if (!database.objectStoreNames.contains("priceHistory")) database.createObjectStore("priceHistory", { keyPath: "id", autoIncrement: true });
+        if (!database.objectStoreNames.contains("cart")) database.createObjectStore("cart", { keyPath: "id", autoIncrement: true });
+        if (!database.objectStoreNames.contains("pendingScans")) {
+            const pending = database.createObjectStore("pendingScans", { keyPath: "localId" });
+            pending.createIndex("syncStatus", "syncStatus", { unique: false });
+            pending.createIndex("barcode", "barcode", { unique: false });
+            pending.createIndex("updatedAt", "updatedAt", { unique: false });
+        }
+    };
+    request.onerror = () => {
+        showToast("Local storage is unavailable. Scans cannot be protected offline.", "error");
+        resolveDbReady();
+    };
+    request.onsuccess = async () => {
+        db = request.result;
+        window.db = db;
+        db.onversionchange = () => db.close();
+        resolveDbReady();
+        try { await removeLegacyDemoData(); } catch (error) { console.warn("Legacy demo cleanup skipped", error); }
+        void initializeAuth().catch((error) => console.warn("Auth initialization skipped", error));
+        void refreshSyncSummary();
+        void updateCartBadge();
+        void updateHomeDashboard();
+    };
+}
+
+async function getSupabaseSession() {
+    const supabase = window.smartCartSupabase?.client;
+    if (!supabase) return null;
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    return data.session;
+}
+
+function setAccountUi() {
+    const statusElements = document.querySelectorAll("[data-account-status]");
+    const userLabel = authSession?.user?.email || "Not signed in";
+    statusElements.forEach((element) => { element.textContent = userLabel; });
+    document.querySelectorAll("[data-auth-required]").forEach((element) => {
+        element.hidden = Boolean(authSession);
+    });
+    document.querySelectorAll("[data-signed-in-only]").forEach((element) => {
+        element.hidden = !authSession;
+    });
+}
+
+async function initializeAuth() {
+    const supabase = window.smartCartSupabase?.client;
+    setAccountUi();
+    if (!supabase) {
+        document.querySelectorAll("[data-connection-state]").forEach((element) => { element.textContent = "Local-only mode"; });
         return;
     }
-
-    const tripId =
-        "trip" + Date.now();
-
-    let total = 0;
-
-    cartItems.forEach(item => {
-
-        total +=
-            item.price *
-            item.quantity;
-
-    });
-
-    const tx =
-        db.transaction(
-            ["trips","tripItems"],
-            "readwrite"
-        );
-
-    const tripsStore =
-        tx.objectStore(
-            "trips"
-        );
-
-    const tripItemsStore =
-        tx.objectStore(
-            "tripItems"
-        );
-
-    tripsStore.add({
-
-        tripId,
-        date:
-            new Date()
-            .toISOString(),
-
-        total
-    });
-
-    cartItems.forEach(item => {
-
-        tripItemsStore.add({
-
-            tripId,
-
-            barcode:
-                item.barcode,
-
-            name:
-                item.name,
-
-            quantity:
-                item.quantity,
-
-            unitPrice:
-                item.price,
-
-            total:
-                item.price *
-                item.quantity
-        });
-
-    });
-
-    tx.oncomplete = () => {
-
-        clearCart();
-
-        alert(
-            "Trip Saved\nTotal: $" +
-            total.toFixed(2)
-        );
-
-        location.reload();
-    };
+    const { data } = await supabase.auth.getSession();
+    authSession = data.session;
+    setAccountUi();
+    syncSubscription?.unsubscribe();
+    syncSubscription = supabase.auth.onAuthStateChange((_event, session) => {
+        authSession = session;
+        setAccountUi();
+        window.setTimeout(() => {
+            void refreshSyncSummary();
+            if (session) void syncPendingScans();
+        }, 0);
+    }).data.subscription;
+    if (authSession) void syncPendingScans();
+    void refreshSyncSummary();
 }
 
+async function saveLocalScan(input) {
+    await dbReady;
+    if (!db) throw new Error("Local database unavailable");
+    const result = validateScan(input);
+    if (!result.valid) throw new Error(result.errors.join(" "));
+    const now = new Date().toISOString();
+    const localId = input.localId || newLocalId();
+    const capturedAt = input.capturedAt || now;
+    const scan = {
+        localId,
+        barcode: result.barcode,
+        name: String(input.name).trim(),
+        brand: String(input.brand ?? "").trim(),
+        category: String(input.category).trim(),
+        size: String(input.size ?? "").trim(),
+        unit: String(input.unit ?? "").trim(),
+        price: result.price,
+        retailer: String(input.retailer).trim(),
+        branch: String(input.branch).trim(),
+        capturedAt,
+        source: String(input.source || "scanner"),
+        syncStatus: "pending",
+        syncAttempts: Number(input.syncAttempts || 0),
+        lastSyncError: null,
+        cloudObservationId: input.cloudObservationId || null,
+        createdAt: input.createdAt || now,
+        updatedAt: now
+    };
+    const transaction = db.transaction(["products", "priceHistory", "pendingScans"], "readwrite");
+    const productsStore = transaction.objectStore("products");
+    const historyStore = transaction.objectStore("priceHistory");
+    const pendingStore = transaction.objectStore("pendingScans");
+    const existing = await requestPromise(productsStore.get(scan.barcode));
+    const existingProduct = existing ? normalizeProduct(existing) : null;
+    const product = {
+        ...(existingProduct || {}),
+        barcode: scan.barcode,
+        name: existingProduct?.name || scan.name,
+        brand: existingProduct?.brand || scan.brand,
+        category: existingProduct?.category || scan.category,
+        size: existingProduct?.size || scan.size,
+        unit: existingProduct?.unit || scan.unit,
+        lastPrice: scan.price,
+        lastRetailer: scan.retailer,
+        lastBranch: scan.branch,
+        lastPriceAt: scan.capturedAt,
+        createdAt: existingProduct?.createdAt || now,
+        updatedAt: now
+    };
+    productsStore.put(product);
+    historyStore.add({
+        localId,
+        barcode: scan.barcode,
+        name: product.name,
+        oldPrice: existingProduct?.lastPrice,
+        newPrice: scan.price,
+        change: Number.isFinite(existingProduct?.lastPrice) && existingProduct.lastPrice > 0
+            ? ((scan.price - existingProduct.lastPrice) / existingProduct.lastPrice) * 100
+            : 0,
+        price: scan.price,
+        retailer: scan.retailer,
+        branch: scan.branch,
+        capturedAt: scan.capturedAt,
+        createdAt: now
+    });
+    pendingStore.put(scan);
+    await transactionPromise(transaction);
+    broadcast("data-updated");
+    return scan;
+}
 
+async function getPendingScan(localId) {
+    await dbReady;
+    return requestPromise(db.transaction("pendingScans", "readonly").objectStore("pendingScans").get(localId));
+}
 
+async function updatePendingScan(localId, updates) {
+    await dbReady;
+    const transaction = db.transaction("pendingScans", "readwrite");
+    const store = transaction.objectStore("pendingScans");
+    const current = await requestPromise(store.get(localId));
+    if (!current) return null;
+    const next = { ...current, ...updates, updatedAt: new Date().toISOString() };
+    store.put(next);
+    await transactionPromise(transaction);
+    return next;
+}
 
+async function markHistorySynced(localId, observationId) {
+    await dbReady;
+    const transaction = db.transaction("priceHistory", "readwrite");
+    const store = transaction.objectStore("priceHistory");
+    const history = await requestPromise(store.getAll());
+    history.filter((row) => row.localId === localId).forEach((row) => {
+        row.cloudObservationId = observationId;
+        store.put(row);
+    });
+    await transactionPromise(transaction);
+}
 
+async function syncOneScan(scan) {
+    const supabase = window.smartCartSupabase?.client;
+    if (!supabase || !authSession) return { status: "pending", error: "Authentication required" };
+    if (!navigator.onLine) return { status: "pending", error: "Offline" };
+    await updatePendingScan(scan.localId, { syncStatus: "syncing", syncAttempts: Number(scan.syncAttempts || 0) + 1, lastSyncError: null });
+    const { data, error } = await supabase.rpc("submit_product_scan", {
+        barcode: scan.barcode,
+        name: scan.name,
+        brand: scan.brand || null,
+        category: scan.category,
+        size: scan.size || null,
+        unit: scan.unit || null,
+        price: scan.price,
+        retailer: scan.retailer,
+        branch: scan.branch,
+        captured_at: scan.capturedAt,
+        source: scan.source || "scanner",
+        local_id: scan.localId
+    });
+    if (error) {
+        await updatePendingScan(scan.localId, { syncStatus: "failed", lastSyncError: error.message || "Database synchronization failed" });
+        return { status: "failed", error: error.message || "Database synchronization failed" };
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    const observationId = row?.price_observation_id || null;
+    await updatePendingScan(scan.localId, { syncStatus: "synced", lastSyncError: null, cloudObservationId: observationId });
+    await markHistorySynced(scan.localId, observationId);
+    localStorage.setItem("smartcart.lastSuccessfulSyncAt", new Date().toISOString());
+    return { status: "synced", observationId };
+}
 
+async function syncPendingScans(options = {}) {
+    if (syncInFlight) return syncInFlight;
+    syncInFlight = (async () => {
+        try {
+            const supabase = window.smartCartSupabase?.client;
+            if (!supabase || !authSession || !navigator.onLine) return [];
+            const pending = await readAll("pendingScans");
+            const candidates = pending.filter((scan) =>
+                (options.onlyLocalId ? scan.localId === options.onlyLocalId : scan.syncStatus === "pending")
+                && scan.syncStatus !== "synced"
+            );
+            const results = [];
+            for (const scan of candidates) results.push(await syncOneScan(scan));
+            await refreshSyncSummary();
+            return results;
+        } catch (error) {
+            console.warn("Synchronization failed", error);
+            return [];
+        } finally {
+            syncInFlight = null;
+        }
+    })();
+    return syncInFlight;
+}
 
+async function retrySync() {
+    await dbReady;
+    const transaction = db.transaction("pendingScans", "readwrite");
+    const store = transaction.objectStore("pendingScans");
+    const scans = await requestPromise(store.getAll());
+    scans.filter((scan) => scan.syncStatus === "failed").forEach((scan) => {
+        scan.syncStatus = "pending";
+        scan.lastSyncError = null;
+        scan.updatedAt = new Date().toISOString();
+        store.put(scan);
+    });
+    await transactionPromise(transaction);
+    const results = await syncPendingScans();
+    await refreshSyncSummary();
+    return results;
+}
 
-// ===============================
-// TEST FUNCTIONS
-// ===============================
+async function saveAndSyncScan(scan, addToCart = false) {
+    const saved = await saveLocalScan(scan);
+    showToast("Saved locally", "success");
+    if (addToCart) await addToCartByBarcode(saved.barcode);
+    const results = await syncPendingScans({ onlyLocalId: saved.localId });
+    const current = await getPendingScan(saved.localId);
+    const result = results[0];
+    if (current?.syncStatus === "synced" || result?.status === "synced") showToast("Saved to cloud", "success");
+    else if (current?.syncStatus === "failed" || result?.status === "failed") showToast("Synchronization failed — record retained locally", "error");
+    else showToast("Saved offline — synchronization pending", "warning");
+    return { ...saved, syncStatus: current?.syncStatus || "pending" };
+}
 
+async function getCloudProductCount() {
+    const supabase = window.smartCartSupabase?.client;
+    if (!supabase || !authSession || !navigator.onLine) return null;
+    const { count, error } = await supabase.from("products").select("barcode", { count: "exact", head: true });
+    if (error) return null;
+    return count ?? 0;
+}
+
+async function refreshSyncSummary() {
+    if (!db) return;
+    const products = await readAll("products");
+    const pending = await readAll("pendingScans");
+    const cloudCount = await getCloudProductCount();
+    const state = window.smartCartSupabase?.configured
+        ? (authSession ? (navigator.onLine ? "Connected" : "Offline") : "Sign in required")
+        : "Local-only mode";
+    document.querySelectorAll("[data-connection-state]").forEach((element) => { element.textContent = state; });
+    document.querySelectorAll("[data-local-product-count]").forEach((element) => { element.textContent = String(products.length); });
+    document.querySelectorAll("[data-cloud-product-count]").forEach((element) => { element.textContent = cloudCount === null ? "—" : String(cloudCount); });
+    document.querySelectorAll("[data-pending-count]").forEach((element) => { element.textContent = String(pending.filter((row) => row.syncStatus === "pending" || row.syncStatus === "syncing").length); });
+    document.querySelectorAll("[data-failed-count]").forEach((element) => { element.textContent = String(pending.filter((row) => row.syncStatus === "failed").length); });
+    const lastSync = localStorage.getItem("smartcart.lastSuccessfulSyncAt");
+    document.querySelectorAll("[data-last-sync]").forEach((element) => { element.textContent = lastSync ? new Date(lastSync).toLocaleString() : "Not yet"; });
+    setAccountUi();
+}
+
+async function saveProduct(product) {
+    return saveLocalScan({
+        barcode: product.barcode,
+        name: product.name,
+        brand: product.brand,
+        category: product.category,
+        size: product.size,
+        unit: product.unit,
+        price: product.lastPrice ?? product.price,
+        retailer: product.lastRetailer || product.retailer || "KCC",
+        branch: product.lastBranch || product.branch || "Main",
+        source: product.source || "manual"
+    });
+}
+
+async function addProduct(product) {
+    return saveProduct(product);
+}
+
+async function findProduct(barcode) {
+    await dbReady;
+    if (!db) return null;
+    const product = await requestPromise(db.transaction("products", "readonly").objectStore("products").get(String(barcode).trim()));
+    return product ? normalizeProduct(product) : null;
+}
+
+async function updateProductPrice(barcode, price, details = {}) {
+    const product = await findProduct(barcode);
+    if (!product) throw new Error("Product not found");
+    return saveAndSyncScan({
+        barcode,
+        name: details.name || product.name,
+        brand: details.brand || product.brand,
+        category: details.category || product.category,
+        size: details.size || product.size,
+        unit: details.unit || product.unit,
+        price,
+        retailer: details.retailer || product.lastRetailer || "KCC",
+        branch: details.branch || product.lastBranch || "Main",
+        source: "scanner"
+    });
+}
+
+async function addToCartByBarcode(barcode) {
+    const product = await findProduct(barcode);
+    if (!product) throw new Error("Product not found in local catalog");
+    await dbReady;
+    const transaction = db.transaction("cart", "readwrite");
+    const store = transaction.objectStore("cart");
+    const items = await requestPromise(store.getAll());
+    const existing = items.find((item) => item.barcode === product.barcode);
+    if (existing) {
+        existing.quantity = Number(existing.quantity || 0) + 1;
+        store.put(existing);
+    } else {
+        store.add({ barcode: product.barcode, name: product.name, price: Number(product.lastPrice) || 0, quantity: 1 });
+    }
+    await transactionPromise(transaction);
+    broadcast("cart-updated");
+    await updateCartBadge();
+    await updateHomeDashboard();
+}
+
+async function getCartItems() { return readAll("cart"); }
+async function updateCartBadge() {
+    if (!db) return;
+    const items = await getCartItems();
+    const count = items.reduce((total, item) => total + Number(item.quantity || 0), 0);
+    document.querySelectorAll("#cartBadge, [data-cart-badge]").forEach((element) => { element.textContent = `🛒 Cart (${count})`; });
+}
+
+async function updateHomeDashboard() {
+    if (!db) return;
+    const items = await getCartItems();
+    const count = items.reduce((total, item) => total + Number(item.quantity || 0), 0);
+    const total = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+    const countElement = document.getElementById("dashboardItems");
+    const totalElement = document.getElementById("dashboardTotal");
+    if (countElement) countElement.textContent = String(count);
+    if (totalElement) totalElement.textContent = formatPHP(total);
+}
+
+async function deleteCartItem(id) {
+    await dbReady;
+    const transaction = db.transaction("cart", "readwrite");
+    transaction.objectStore("cart").delete(Number(id));
+    await transactionPromise(transaction);
+    broadcast("cart-updated");
+}
+
+async function increaseCartQuantity(id) {
+    await changeCartQuantity(id, 1);
+}
+
+async function decreaseCartQuantity(id) {
+    await changeCartQuantity(id, -1);
+}
+
+async function changeCartQuantity(id, delta) {
+    await dbReady;
+    const transaction = db.transaction("cart", "readwrite");
+    const store = transaction.objectStore("cart");
+    const item = await requestPromise(store.get(Number(id)));
+    if (item) {
+        item.quantity = Number(item.quantity || 0) + delta;
+        if (item.quantity <= 0) store.delete(Number(id)); else store.put(item);
+    }
+    await transactionPromise(transaction);
+    broadcast("cart-updated");
+}
+
+async function clearCart() {
+    await dbReady;
+    const transaction = db.transaction("cart", "readwrite");
+    transaction.objectStore("cart").clear();
+    await transactionPromise(transaction);
+    broadcast("cart-updated");
+}
+
+async function checkoutCart() {
+    const items = await getCartItems();
+    if (!items.length) { showToast("Your cart is empty", "warning"); return; }
+    const total = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+    const tripId = `trip-${Date.now()}`;
+    const transaction = db.transaction(["trips", "tripItems"], "readwrite");
+    transaction.objectStore("trips").add({ tripId, date: new Date().toISOString(), total });
+    const itemsStore = transaction.objectStore("tripItems");
+    items.forEach((item) => itemsStore.add({ tripId, barcode: item.barcode, name: item.name, quantity: item.quantity, unitPrice: item.price, total: item.price * item.quantity }));
+    await transactionPromise(transaction);
+    await clearCart();
+    showToast(`Trip saved — ${formatPHP(total)}`, "success");
+    await updateCartBadge();
+    await updateHomeDashboard();
+}
+
+async function getTripItems(tripId) {
+    const items = await readAll("tripItems");
+    return items.filter((item) => item.tripId === tripId);
+}
+
+async function saveTrip(trip) {
+    await dbReady;
+    const transaction = db.transaction("trips", "readwrite");
+    transaction.objectStore("trips").put(trip);
+    return transactionPromise(transaction);
+}
+
+async function savePriceHistory(data) {
+    await dbReady;
+    const transaction = db.transaction("priceHistory", "readwrite");
+    transaction.objectStore("priceHistory").add(data);
+    return transactionPromise(transaction);
+}
+
+async function getPriceHistory() { return readAll("priceHistory"); }
+
+async function getMonthlySpending() {
+    const trips = await readAll("trips");
+    return trips.reduce((result, trip) => {
+        const month = String(trip.date || "").slice(0, 7) || "Unknown";
+        result[month] = (result[month] || 0) + (Number(trip.total) || 0);
+        return result;
+    }, {});
+}
+
+async function getCategorySpending() {
+    const items = await readAll("tripItems");
+    const products = await readAll("products");
+    const byBarcode = new Map(products.map((product) => [product.barcode, product.category || "Uncategorized"]));
+    return items.reduce((result, item) => {
+        const category = byBarcode.get(item.barcode) || "Uncategorized";
+        result[category] = (result[category] || 0) + (Number(item.total) || 0);
+        return result;
+    }, {});
+}
+
+async function getInflationStats() {
+    const history = await getPriceHistory();
+    const changes = history.filter((item) => Number.isFinite(Number(item.change)) && item.oldPrice > 0);
+    const sorted = [...changes].sort((a, b) => Number(b.change) - Number(a.change));
+    return { overall: changes.length ? changes.reduce((sum, item) => sum + Number(item.change), 0) / changes.length : 0, highestIncrease: sorted[0] || null, highestDecrease: sorted[sorted.length - 1] || null, totalChanges: changes.length };
+}
+
+async function getPriceInsights() {
+    const stats = await getInflationStats();
+    return { biggestIncrease: stats.highestIncrease || { name: "N/A", change: 0 }, biggestDecrease: stats.highestDecrease || { name: "N/A", change: 0 }, totalChanges: stats.totalChanges };
+}
+
+async function getPriceAlerts() { return []; }
+async function getRecommendations() { return []; }
+async function getInflationLeaderboard() { const history = await getPriceHistory(); return history.filter((item) => item.oldPrice > 0).sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 10); }
+
+async function getBudget() { const rows = await readAll("budget"); return rows[0] || null; }
+async function setBudget(amount) { const transaction = db.transaction("budget", "readwrite"); transaction.objectStore("budget").put({ id: "current", amount: Number(amount) }); return transactionPromise(transaction); }
+async function deleteBudget() { const transaction = db.transaction("budget", "readwrite"); transaction.objectStore("budget").delete("current"); return transactionPromise(transaction); }
+
+function validLocalProduct(product) {
+    const check = validateScan({ ...product, price: product.lastPrice ?? product.price, retailer: product.lastRetailer || "KCC", branch: product.lastBranch || "Main" });
+    return check.valid;
+}
+
+async function setProductMigrationStatus(barcode, patch) {
+    const product = await findProduct(barcode);
+    if (!product) return;
+    const transaction = db.transaction("products", "readwrite");
+    transaction.objectStore("products").put({ ...product, ...patch, updatedAt: new Date().toISOString() });
+    await transactionPromise(transaction);
+}
+
+async function migrateLocalProducts() {
+    const products = await readAll("products");
+    const seen = new Set();
+    const totals = { migrated: 0, skipped: 0, failed: 0 };
+    for (const sourceProduct of products) {
+        const product = normalizeProduct(sourceProduct);
+        if (DEMO_BARCODES.has(product.barcode) || seen.has(product.barcode)) { totals.skipped += 1; continue; }
+        seen.add(product.barcode);
+        if (!validLocalProduct(product)) { totals.failed += 1; continue; }
+        let pending = product.migrationLocalId ? await getPendingScan(product.migrationLocalId) : null;
+        if (pending?.syncStatus === "synced" || product.migrationStatus === "synced") { totals.skipped += 1; continue; }
+        try {
+            if (!pending) {
+                const localId = product.migrationLocalId || `migration-${product.barcode}`;
+                await setProductMigrationStatus(product.barcode, { migrationLocalId: localId, migrationStatus: "pending" });
+                await saveLocalScan({
+                    localId,
+                    barcode: product.barcode,
+                    name: product.name,
+                    brand: product.brand,
+                    category: product.category,
+                    size: product.size,
+                    unit: product.unit,
+                    price: product.lastPrice,
+                    retailer: product.lastRetailer || "KCC",
+                    branch: product.lastBranch || "Main",
+                    capturedAt: product.lastPriceAt,
+                    source: "local-migration"
+                });
+                pending = await getPendingScan(localId);
+            }
+            await syncPendingScans({ onlyLocalId: pending.localId });
+            pending = await getPendingScan(pending.localId);
+            if (pending?.syncStatus === "synced") {
+                await setProductMigrationStatus(product.barcode, { migrationStatus: "synced", migrationObservationId: pending.cloudObservationId });
+                totals.migrated += 1;
+            } else {
+                totals.failed += 1;
+            }
+        } catch (error) {
+            console.warn("Local product migration failed", product.barcode, error);
+            totals.failed += 1;
+        }
+    }
+    await refreshSyncSummary();
+    return totals;
+}
+
+async function exportLocalBackup() {
+    const backup = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        products: await readAll("products"),
+        priceHistory: await readAll("priceHistory"),
+        pendingScans: await readAll("pendingScans"),
+        trips: await readAll("trips"),
+        tripItems: await readAll("tripItems")
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `smartcart-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast("Local backup exported", "success");
+}
+
+async function exportProductsCsv() {
+    const products = await readAll("products");
+    const fields = ["barcode", "name", "brand", "category", "size", "unit", "lastPrice", "lastRetailer", "lastBranch", "lastPriceAt"];
+    const csv = [fields.join(","), ...products.map((product) => fields.map((field) => `"${String(product[field] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `smartcart-products-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast("Products CSV exported", "success");
+}
+
+function validateBackup(backup) {
+    const collections = ["products", "priceHistory", "pendingScans", "trips", "tripItems"];
+    if (!backup || typeof backup !== "object" || collections.some((name) => !Array.isArray(backup[name]))) throw new Error("Backup must contain products, priceHistory, pendingScans, trips, and tripItems arrays.");
+    const barcodes = new Set();
+    backup.products.forEach((product) => {
+        const barcode = validateBarcode(product.barcode);
+        if (!barcode || !String(product.name || "").trim() || !String(product.category || "").trim()) throw new Error("Backup contains an invalid product.");
+        if (barcodes.has(barcode)) throw new Error(`Backup contains duplicate barcode ${barcode}.`);
+        barcodes.add(barcode);
+        if (product.lastPrice != null && (!Number.isFinite(Number(product.lastPrice)) || Number(product.lastPrice) <= 0)) throw new Error(`Backup contains an invalid price for ${barcode}.`);
+    });
+    backup.pendingScans.forEach((scan) => {
+        if (!scan.localId || !validateBarcode(scan.barcode) || !["pending", "syncing", "synced", "failed"].includes(scan.syncStatus)) throw new Error("Backup contains an invalid pending scan.");
+    });
+    backup.trips.forEach((trip) => { if (!trip.tripId) throw new Error("Backup contains an invalid trip."); });
+    return true;
+}
+
+async function importLocalBackup(backup) {
+    validateBackup(backup);
+    const transaction = db.transaction(["products", "priceHistory", "pendingScans", "trips", "tripItems"], "readwrite");
+    const stores = Object.fromEntries(["products", "priceHistory", "pendingScans", "trips", "tripItems"].map((name) => [name, transaction.objectStore(name)]));
+    backup.products.forEach((item) => stores.products.put(normalizeProduct(item)));
+    backup.priceHistory.forEach((item) => stores.priceHistory.put(item));
+    backup.pendingScans.forEach((item) => stores.pendingScans.put(item));
+    backup.trips.forEach((item) => stores.trips.put(item));
+    backup.tripItems.forEach((item) => stores.tripItems.put(item));
+    await transactionPromise(transaction);
+    await refreshSyncSummary();
+    showToast("Backup imported locally", "success");
+}
+
+function setActiveNavigation() {
+    const page = location.pathname.split("/").pop() || "index.html";
+    const morePages = new Set(["sync.html", "auth.html", "analytics.html", "trip-history.html", "trip-details.html"]);
+    document.querySelectorAll("[data-nav-page]").forEach((link) => {
+        const isActive = link.dataset.navPage === page || (page === "index.html" && link.dataset.navPage === "home") || (morePages.has(page) && link.dataset.navPage === "sync");
+        link.classList.toggle("active", isActive);
+    });
+}
+
+if (cartChannel) cartChannel.addEventListener("message", () => { void updateCartBadge(); void updateHomeDashboard(); });
+window.addEventListener("online", () => { void syncPendingScans(); void refreshSyncSummary(); showToast("Connection restored — syncing pending scans", "info"); });
+window.addEventListener("offline", () => { void refreshSyncSummary(); showToast("Offline mode — scans will stay on this device", "warning"); });
+window.addEventListener("unhandledrejection", (event) => { event.preventDefault(); console.warn("Handled SmartCart promise rejection", event.reason); showToast("SmartCart could not complete that action.", "error"); });
+window.addEventListener("error", (event) => { if (event.error) console.warn("Handled SmartCart error", event.error); });
+document.addEventListener("DOMContentLoaded", () => { setActiveNavigation(); void refreshSyncSummary(); });
 
 window.smartCart = {
-
     dbReady,
-
     addProduct,
     findProduct,
-
-
-    getPriceInsights,
-    getMonthlySpending,
-
-
+    saveLocalScan,
+    saveAndSyncScan,
+    syncPendingScans,
+    retrySync,
+    migrateLocalProducts,
+    exportLocalBackup,
+    exportProductsCsv,
+    importLocalBackup,
+    updateProductPrice,
+    addToCart: addToCartByBarcode,
+    addToCartByBarcode,
+    getCartItems,
+    updateCartBadge,
+    updateHomeDashboard,
+    increaseCartQuantity: increaseCartQuantity,
+    decreaseCartQuantity: decreaseCartQuantity,
+    deleteCartItem,
+    clearCart,
     checkoutCart,
-    
-
     getTripItems,
-    
     saveTrip,
     savePriceHistory,
-
-    addToCart,
-    getCartItems,
-
-    increaseCartQuantity,
-    decreaseCartQuantity,
-
     getPriceHistory,
     getInflationStats,
+    getPriceInsights,
+    getMonthlySpending,
     getCategorySpending,
     getPriceAlerts,
-
-    deleteCartItem,
-    clearCart
+    getRecommendations,
+    getInflationLeaderboard,
+    getBudget,
+    setBudget,
+    deleteBudget,
+    formatPHP,
+    escapeHtml,
+    validateBarcode,
+    validateScan,
+    confirmAction,
+    showToast,
+    getSession: getSupabaseSession,
+    get authSession() { return authSession; }
 };
 
-
-
-console.log(
-    "Smart Cart Ready"
-);
-
-setTimeout(() => {
-
-    addProduct({
-        barcode: "999999",
-        name: "Milo",
-        category: "Beverages",
-        lastPrice: 8.95
-    });
-
-    console.log("Milo Added");
-
-}, 3000);
-
-
-
-function addToCart(barcode){
-
-    return new Promise(resolve => {
-
-        findProduct(barcode)
-
-        .then(product => {
-
-            const tx =
-                db.transaction(
-                    "cart",
-                    "readwrite"
-                );
-
-            const store =
-                tx.objectStore(
-                    "cart"
-                );
-
-            const request =
-                store.getAll();
-
-            request.onsuccess = () => {
-
-                const existing =
-                    request.result.find(
-                        item =>
-                        item.barcode === barcode
-                    );
-
-                if(existing){
-
-                    existing.quantity += 1;
-
-                    store.put(existing);
-                    broadcastCartUpdate();
-                    resolve();
-
-                } else {
-
-                    store.add({
-                        barcode:product.barcode,
-                        name:product.name,
-                        price:product.lastPrice,
-                        quantity:1
-
-});
-
-broadcastCartUpdate();
-
-resolve();
-                }
-            };
-        });
-    });
-}
-
-
-
-
-
-
-
-
-
-function getCartItems(){
-
-    return new Promise(
-        resolve => {
-
-        const tx =
-            db.transaction(
-                "cart",
-                "readonly"
-            );
-
-        const store =
-            tx.objectStore(
-                "cart"
-            );
-
-        const request =
-            store.getAll();
-
-        request.onsuccess =
-            () =>
-            resolve(
-                request.result
-            );
-
-    });
-}
-
-
-function deleteCartItem(id){
-
-    const tx =
-        db.transaction(
-            "cart",
-            "readwrite"
-        );
-
-    const store =
-        tx.objectStore(
-            "cart"
-        );
-
-    store.delete(id);
-
-broadcastCartUpdate();
-
-}
-
-function increaseCartQuantity(id){
-
-    const tx =
-        db.transaction(
-            "cart",
-            "readwrite"
-        );
-
-    const store =
-        tx.objectStore("cart");
-
-    const request =
-        store.get(id);
-
-    request.onsuccess = () => {
-
-        const item =
-            request.result;
-
-        item.quantity += 1;
-
-        store.put(item);
-
-broadcastCartUpdate();
-
-    };
-}
-
-function decreaseCartQuantity(id){
-
-    const tx =
-        db.transaction(
-            "cart",
-            "readwrite"
-        );
-
-    const store =
-        tx.objectStore("cart");
-
-    const request =
-        store.get(id);
-
-    request.onsuccess = () => {
-
-        const item =
-            request.result;
-
-        item.quantity -= 1;
-
-        if(item.quantity <= 0){
-
-            store.delete(id);
-
-broadcastCartUpdate();
-
-        }else{
-
-            store.put(item);
-
-broadcastCartUpdate();
-
-        }
-    };
-}
-
-
-function clearCart(){
-
-    const tx =
-        db.transaction(
-            "cart",
-            "readwrite"
-        );
-
-    const store =
-        tx.objectStore(
-            "cart"
-        );
-
-    store.clear();
-
-broadcastCartUpdate();
-
-}
-
-
-
-function getPriceHistory(){
-
-
-
-
-
-
-    return new Promise((resolve)=>{
-
-        const tx =
-            db.transaction(
-                "priceHistory",
-                "readonly"
-            );
-
-        const store =
-            tx.objectStore(
-                "priceHistory"
-            );
-
-        const request =
-            store.getAll();
-
-        request.onsuccess = ()=>{
-
-            resolve(
-                request.result
-            );
-        };
-    });
-}
-
-function getInflationStats(){
-
-    return new Promise(async resolve => {
-
-        const history =
-
-            await getPriceHistory();
-
-        if(history.length === 0){
-
-            resolve({
-
-                overall:0,
-                highestIncrease:null,
-                highestDecrease:null,
-                totalChanges:0
-
-            });
-
-            return;
-        }
-
-        let total = 0;
-
-        let highestIncrease =
-            history[0];
-
-        let highestDecrease =
-            history[0];
-
-        history.forEach(item => {
-
-            total += item.change;
-
-            if(
-                item.change >
-                highestIncrease.change
-            ){
-
-                highestIncrease =
-                    item;
-            }
-
-            if(
-                item.change <
-                highestDecrease.change
-            ){
-
-                highestDecrease =
-                    item;
-            }
-
-        });
-
-        resolve({
-
-            overall:
-
-                total /
-                history.length,
-
-            highestIncrease,
-
-            highestDecrease,
-
-            totalChanges:
-
-                history.length
-
-        });
-
-    });
-
-}
-
-
-function getCategorySpending(){
-
-    return new Promise(resolve => {
-
-        const tx =
-            db.transaction(
-                "tripItems",
-                "readonly"
-            );
-
-        const store =
-            tx.objectStore(
-                "tripItems"
-            );
-
-        const request =
-            store.getAll();
-
-        request.onsuccess =
-            async () => {
-
-                const items =
-                    request.result;
-
-                const results = {};
-
-                for(const item of items){
-
-                    const product =
-                        await findProduct(
-                            item.barcode
-                        );
-
-                    const category =
-                        product?.category ||
-                        "Unknown";
-
-                    if(!results[category]){
-
-                        results[category] = 0;
-                    }
-
-                    results[category] +=
-                        item.total;
-                }
-
-                resolve(results);
-            };
-    });
-}
-
-
-
-smartCart.setBudget =
-async function(amount){
-
-    const tx =
-        db.transaction(
-            "budget",
-            "readwrite"
-        );
-
-    tx.objectStore(
-        "budget"
-    ).put({
-
-        id: 1,
-
-        amount:
-            Number(amount)
-
-    });
-
-};
-
-smartCart.getBudget =
-async function(){
-
-    return new Promise(
-        resolve => {
-
-            const tx =
-                db.transaction(
-                    "budget",
-                    "readonly"
-                );
-
-            const request =
-                tx.objectStore(
-                    "budget"
-                ).get(1);
-
-            request.onsuccess =
-                () => {
-
-                resolve(
-                    request.result
-                );
-
-            };
-
-        }
-    );
-
-};
-
-
-smartCart.deleteBudget =
-async function(){
-
-    const tx =
-        db.transaction(
-            "budget",
-            "readwrite"
-        );
-
-    tx.objectStore(
-        "budget"
-    ).delete(1);
-
-};
-
-
-
-
-smartCart.updateProductPrice =
-async function(barcode,newPrice){
-
-    const product =
-        await smartCart.findProduct(
-            barcode
-        );
-
-    if(!product) return;
-
-    const oldPrice =
-        product.lastPrice;
-
-    if(oldPrice !== newPrice){
-
-        smartCart.savePriceHistory({
-
-    barcode,
-    name: product.name,
-    oldPrice,
-    newPrice,
-
-    change:
-    (
-        (
-            newPrice - oldPrice
-        )
-        /
-        oldPrice
-    ) * 100,
-
-    date:
-        new Date()
-        .toISOString()
-});
-    }
-
-    product.lastPrice =
-        newPrice;
-
-    const tx =
-        db.transaction(
-            "products",
-            "readwrite"
-        );
-
-    tx.objectStore(
-        "products"
-    ).put(product);
-};
-
-function getTripItems(tripId){
-
-    return new Promise(resolve => {
-
-        const tx =
-            db.transaction(
-                "tripItems",
-                "readonly"
-            );
-
-        const store =
-            tx.objectStore(
-                "tripItems"
-            );
-
-        const request =
-            store.getAll();
-
-        request.onsuccess = () => {
-
-            const items =
-
-                request.result.filter(
-                    item =>
-                    item.tripId === tripId
-                );
-
-            resolve(items);
-        };
-    });
-}
-
-
-function getMonthlySpending(){
-
-    return new Promise(resolve => {
-
-        const tx =
-            db.transaction(
-                "trips",
-                "readonly"
-            );
-
-        const store =
-            tx.objectStore(
-                "trips"
-            );
-
-        const request =
-            store.getAll();
-
-        request.onsuccess = () => {
-
-            const trips =
-                request.result;
-
-            const monthly = {};
-
-            trips.forEach(trip => {
-
-                const date =
-                    new Date(trip.date);
-
-                const key =
-                    date.getFullYear() +
-                    "-" +
-                    String(
-                        date.getMonth() + 1
-                    ).padStart(2,"0");
-
-                if(!monthly[key]){
-
-                    monthly[key] = 0;
-                }
-
-                monthly[key] += trip.total;
-            });
-
-            resolve(monthly);
-        };
-    });
-}
-
-function getPriceAlerts(){
-
-    return new Promise(async resolve => {
-
-        const history =
-            await getPriceHistory();
-
-        const alerts = [];
-
-        history.forEach(item => {
-
-            if(item.change >= 25){
-
-                alerts.push({
-                    type: "severe",
-                    message:
-                        `${item.name} increased ${item.change.toFixed(1)}%`
-                });
-
-            }
-
-            else if(item.change > 0){
-
-                alerts.push({
-                    type: "increase",
-                    message:
-                        `${item.name} increased ${item.change.toFixed(1)}%`
-                });
-
-            }
-
-            else if(item.change < 0){
-
-                alerts.push({
-                    type: "decrease",
-                    message:
-                        `${item.name} decreased ${Math.abs(item.change).toFixed(1)}%`
-                });
-
-            }
-
-        });
-
-        resolve(alerts);
-
-    });
-
-}
-
-
-
-
-
-
-function getPriceInsights(){
-
-    return new Promise(async resolve => {
-
-        const history =
-            await getPriceHistory();
-
-        if(history.length === 0){
-
-            resolve({
-
-                biggestIncrease:null,
-                biggestDecrease:null,
-                totalChanges:0
-
-            });
-
-            return;
-        }
-
-        let biggestIncrease =
-            history[0];
-
-        let biggestDecrease =
-            history[0];
-
-        history.forEach(item => {
-
-            if(
-                item.change >
-                biggestIncrease.change
-            ){
-
-                biggestIncrease =
-                    item;
-            }
-
-            if(
-                item.change <
-                biggestDecrease.change
-            ){
-
-                biggestDecrease =
-                    item;
-            }
-
-        });
-
-        resolve({
-
-            biggestIncrease,
-            biggestDecrease,
-
-            totalChanges:
-                history.length
-
-        });
-
-    });
-
-}
-
-
-smartCart.getInflationLeaderboard =
-
-async function(){
-
-    const history =
-
-        await smartCart
-        .getPriceHistory();
-
-    return history
-
-        .sort(
-
-            (a,b) =>
-
-                Math.abs(b.change) -
-
-                Math.abs(a.change)
-
-        )
-
-        .map(item => ({
-
-            name:
-
-                item.name,
-
-            change:
-
-                item.change
-
-        }));
-
-};
-
-smartCart.getRecommendations =
-
-async function(){
-
-    const spending =
-        await smartCart
-        .getCategorySpending();
-
-    const budget =
-        await smartCart
-        .getBudget();
-
-    const monthly =
-        await smartCart
-        .getMonthlySpending();
-
-    const recommendations = [];
-
-    const categories =
-        Object.entries(spending);
-
-    if(categories.length > 0){
-
-        const topCategory =
-
-            categories.sort(
-                (a,b)=>
-                b[1]-a[1]
-            )[0];
-
-        recommendations.push({
-
-            title:
-                "Top Category",
-
-            message:
-                `${topCategory[0]} - $${topCategory[1].toFixed(2)}`
-
-        });
-
-    }
-
-    if(budget){
-
-        const latestMonth =
-
-            Object.keys(monthly)
-            .sort()
-            .pop();
-
-        const spent =
-
-            latestMonth
-
-            ? monthly[latestMonth]
-
-            : 0;
-
-        const percent =
-
-            (
-                spent /
-                budget.amount
-            ) * 100;
-
-        recommendations.push({
-
-            title:
-                "Budget Usage",
-
-            message:
-                `${percent.toFixed(1)}% used`
-
-        });
-
-    }
-
-    return recommendations;
-
-};
-
-async function updateCartBadge(){
-
-    const items =
-        await getCartItems();
-
-    let count = 0;
-
-    items.forEach(item => {
-
-        count += item.quantity;
-
-    });
-
-    const badge =
-
-        document.getElementById(
-            "cartBadge"
-        );
-
-    if(badge){
-
-        badge.textContent =
-
-            `🛒 Cart (${count})`;
-    }
-}
-
-dbReady.then(() => {
-
-    updateCartBadge();
-
-    updateHomeDashboard();
-
-});
-
-cartChannel.onmessage = () => {
-
-    updateCartBadge();
-
-    updateHomeDashboard();
-
-    if(typeof loadCart === "function"){
-
-        loadCart();
-
-    }
-
-};
-
-
-
-async function updateHomeDashboard(){
-
-    const items = await getCartItems();
-
-    let totalItems = 0;
-    let totalPrice = 0;
-
-    items.forEach(item => {
-
-        totalItems += item.quantity;
-
-        totalPrice +=
-            item.price *
-            item.quantity;
-
-    });
-
-    const itemsBox =
-        document.getElementById(
-            "dashboardItems"
-        );
-
-    const totalBox =
-        document.getElementById(
-            "dashboardTotal"
-        );
-
-    if(itemsBox){
-
-        itemsBox.textContent =
-            totalItems;
-
-    }
-
-    if(totalBox){
-
-        totalBox.textContent =
-            "$" +
-            totalPrice.toFixed(2);
-
-    }
-
-}
-
-
-
-
+openDatabase();

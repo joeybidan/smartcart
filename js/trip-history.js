@@ -1,106 +1,12 @@
-window.addEventListener(
-    "load",
-    loadTrips
-);
-
-async function loadTrips(){
-
-    const tx =
-        db.transaction(
-            "trips",
-            "readonly"
-        );
-
-    const store =
-        tx.objectStore(
-            "trips"
-        );
-
-    const request =
-        store.getAll();
-
-    request.onsuccess =
-        () => {
-
-            const trips =
-                request.result;
-
-            renderTrips(
-                trips
-            );
-        };
+async function loadTrips() {
+    try {
+        await smartCart.dbReady;
+        const trips = await new Promise((resolve) => { const request = db.transaction("trips", "readonly").objectStore("trips").getAll(); request.onsuccess = () => resolve(request.result || []); request.onerror = () => resolve([]); });
+        const container = document.getElementById("tripList");
+        if (!trips.length) { container.className = "empty-state"; container.textContent = "No trips yet."; return; }
+        container.className = "";
+        container.innerHTML = trips.sort((a, b) => String(b.date).localeCompare(String(a.date))).map((trip) => `<article class="product-card"><div class="section-heading"><div><h3>${smartCart.escapeHtml(trip.tripId)}</h3><p>${new Date(trip.date).toLocaleString()}</p></div><strong>${smartCart.formatPHP(trip.total)}</strong></div><button class="button button-secondary" type="button" data-trip-id="${smartCart.escapeHtml(trip.tripId)}">View items</button></article>`).join("");
+    } catch (error) { console.warn("Trips could not load", error); }
 }
 
-function renderTrips(trips){
-
-    const container =
-        document.getElementById(
-            "tripList"
-        );
-
-    if(trips.length === 0){
-
-        container.innerHTML =
-            "<p>No Trips Yet</p>";
-
-        return;
-    }
-
-    container.innerHTML = "";
-
-    trips.reverse();
-
-    trips.forEach(trip => {
-
-        container.innerHTML += `
-
-        <div class="product-card">
-
-            <strong>
-
-                ${trip.tripId}
-
-            </strong>
-
-            <br>
-
-            Date:
-
-            ${new Date(
-                trip.date
-            ).toLocaleString()}
-
-            <br>
-
-            Total:
-
-            $${trip.total.toFixed(2)}
-
-            <br><br>
-
-            <button
-
-            onclick="viewTrip(
-                '${trip.tripId}'
-            )">
-
-            View Items
-
-            </button>
-
-        </div>
-
-        `;
-    });
-}
-
-function viewTrip(tripId){
-
-    localStorage.setItem(
-        "selectedTrip",
-        tripId
-    );
-
-    location.href =
-        "trip-details.html";
-}
+document.addEventListener("DOMContentLoaded", () => { document.getElementById("tripList")?.addEventListener("click", (event) => { const button = event.target.closest("[data-trip-id]"); if (!button) return; localStorage.setItem("selectedTrip", button.dataset.tripId); location.href = "trip-details.html"; }); void loadTrips(); });

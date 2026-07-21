@@ -1,190 +1,28 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>Smart Cart</title>
-
-<link rel="stylesheet"
-href="../css/style.css">
-
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartCart · Field collector</title>
+    <link rel="stylesheet" href="../css/style.css">
 </head>
-
-<body>
-
-<header class="topbar">
-
-
-    <a href="index.html" class="logo">
-
-    <div class="brand-title">
-        🛒 SmartCart™
-    </div>
-
-    <div class="brand-subtitle">
-        by JoeyB™
-    </div>
-
-</a>
-
-<a
-href="cart.html"
-class="cart-badge"
-id="cartBadge">
-
-🛒 Cart (0)
-
-</a>
-
-
-</header>
-
-<main>
-
-    <section class="hero-card">
-
-        <h2>Current Shopping Trip</h2>
-
-        <div class="trip-stats">
-
-            <div class="stat-box">
-    <span
-        class="stat-number"
-        id="dashboardItems">
-
-        0
-
-    </span>
-
-    <span class="stat-label">
-        Items
-    </span>
-</div>
-
-            <div class="stat-box">
-
-    <span
-        class="stat-number"
-        id="dashboardTotal">
-
-        $0.00
-
-    </span>
-
-    <span class="stat-label">
-
-        Total
-
-    </span>
-
-</div>
-
-        </div>
-
-<button
-    class="scan-btn"
-    onclick="location.href='scanner.html'">
-
-    📷 Scan Product
-
-</button>
-
-    </section>
-
-    <section class="card">
-
-        <h3>Recent Trips</h3>
-
-        <div class="list-item">
-            <span>June 2026</span>
-            <span>$212</span>
-        </div>
-
-        <div class="list-item">
-            <span>May 2026</span>
-            <span>$476</span>
-        </div>
-
-        <div class="list-item">
-            <span>April 2026</span>
-            <span>$520</span>
-        </div>
-
-    </section>
-
-    <section class="card">
-
-        <h3>Quick Stats</h3>
-
-        <div class="stat-row">
-            <strong>Most Purchased:</strong>
-            <span>Eggs</span>
-        </div>
-
-        <div class="stat-row">
-            <strong>Price Increase:</strong>
-            <span>Milk +18%</span>
-        </div>
-
-        <div class="stat-row">
-            <strong>Budget Status:</strong>
-            <span>65%</span>
-        </div>
-
-    </section>
-
-</main>
-
-<nav class="bottom-nav">
-
-    <a href="index.html" class="active">
-        🏠
-        <span>Home</span>
-    </a>
-
-    <a href="cart.html">
-        🛒
-    <span>Cart</span>
-    </a>
-
-    <a href="products.html">
-        📦
-        <span>Products</span>
-    </a>
-
-    <a href="analytics.html">
-        📈
-        <span>Analytics</span>
-    </a>
-
-    <a href="trip-history.html">
-        ⚙️
-        <span>Settings</span>
-    </a>
-
-</nav>
-
-
-
-
-<script src="../js/app.js"></script>
-
-
-<footer class="footer">
-
-    Email me:
-
-    <a href="mailto:businesssjoey.bidan@gmail.com">
-        businesssjoey.bidan@gmail.com
-    </a>
-
-</footer>
-
-
+<body data-page="home">
+    <header class="topbar">
+        <a class="logo" href="index.html" aria-label="SmartCart home"><span class="logo-mark">🛒</span><span class="brand-title">SmartCart</span><span class="brand-subtitle">by JoeyB</span></a>
+        <a href="cart.html" class="cart-badge" id="cartBadge" data-cart-badge>🛒 Cart (0)</a>
+    </header>
+    <main class="page-shell">
+        <section class="page-heading"><p class="eyebrow">Offline-first field collector</p><h1>Good day, Joey.</h1><p class="muted">Collect grocery prices at KCC and SM even when connectivity is unreliable.</p></section>
+        <section class="hero-card">
+            <div class="section-heading"><div><p class="eyebrow">Current shopping trip</p><h2>Collection dashboard</h2></div><a class="button button-secondary" href="scanner.html">Scan now</a></div>
+            <div class="stat-grid"><div class="stat-box"><span class="stat-number" id="dashboardItems">0</span><span class="stat-label">Cart items</span></div><div class="stat-box"><span class="stat-number" id="dashboardTotal">₱0.00</span><span class="stat-label">Cart total</span></div><div class="stat-box"><span class="stat-number" data-local-product-count>0</span><span class="stat-label">Local products</span></div><div class="stat-box"><span class="stat-number" data-pending-count>0</span><span class="stat-label">Pending sync</span></div></div>
+            <div class="button-row" style="margin-top:16px"><a class="button button-primary" href="scanner.html">▣ Scan product</a><a class="button button-secondary" href="sync.html">View sync status</a></div>
+        </section>
+        <section class="card"><div class="section-heading"><div><h2>Account &amp; cloud</h2><p class="muted">Cloud writes require an authenticated account.</p></div><span class="sync-badge" data-connection-state>Local-only mode</span></div><div class="status-line"><span class="status-label">Signed in as</span><strong data-account-status>Not signed in</strong></div><div class="status-line"><span class="status-label">Last successful sync</span><strong data-last-sync>Not yet</strong></div><div class="button-row" style="margin-top:14px"><a class="button button-secondary" href="auth.html">Manage sign-in</a><a class="button button-secondary" href="sync.html">Back up data</a></div></section>
+        <section class="card"><div class="section-heading"><div><h2>Recent trips</h2><p class="muted">Trips, cart, and analytics remain local in this release.</p></div><a class="button button-ghost" href="trip-history.html">See all</a></div><div id="recentTrips" class="empty-state">No trips yet. Checkout a cart to create one.</div></section>
+    </main>
+    <nav class="bottom-nav" aria-label="Primary navigation"><a href="index.html" data-nav-page="home">⌂<span>Home</span></a><a href="scanner.html" data-nav-page="scanner">▣<span>Scan</span></a><a href="cart.html" data-nav-page="cart">🛒<span>Cart</span></a><a href="products.html" data-nav-page="products">▤<span>Products</span></a><a href="sync.html" data-nav-page="sync">☷<span>More</span></a></nav>
+    <div data-toast role="status" aria-live="polite"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.50.0"></script><script src="../js/runtime-config.js"></script><script src="../js/supabase-client.js"></script><script src="../js/app.js"></script><script src="../js/home.js"></script>
 </body>
 </html>
-

@@ -9,6 +9,7 @@ let db = null;
 let authSession = null;
 let syncInFlight = null;
 let syncSubscription = null;
+let lastCloudLookupNoticeAt = 0;
 let resolveDbReady;
 const dbReady = new Promise((resolve) => { resolveDbReady = resolve; });
 const cartChannel = "BroadcastChannel" in window ? new BroadcastChannel("smartcart") : null;
@@ -79,7 +80,6 @@ function validateScan(scan) {
     const errors = [];
     if (!barcode) errors.push("Barcode must contain exactly 8, 12, 13, or 14 digits.");
     if (!String(scan.name ?? "").trim()) errors.push("Product name is required.");
-    if (!String(scan.category ?? "").trim()) errors.push("Category is required.");
     if (!Number.isFinite(price) || price <= 0) errors.push("Price must be greater than zero.");
     if (!String(scan.retailer ?? "").trim()) errors.push("Retailer is required.");
     if (!String(scan.branch ?? "").trim()) errors.push("Branch is required.");
@@ -257,7 +257,7 @@ async function saveLocalScan(input) {
         barcode: result.barcode,
         name: String(input.name).trim(),
         brand: String(input.brand ?? "").trim(),
-        category: String(input.category).trim(),
+        category: String(input.category ?? "").trim() || "Uncategorized",
         size: String(input.size ?? "").trim(),
         unit: String(input.unit ?? "").trim(),
         price: result.price,
@@ -353,7 +353,7 @@ async function syncOneScan(scan) {
         barcode: scan.barcode,
         name: scan.name,
         brand: scan.brand || null,
-        category: scan.category,
+        category: scan.category || "Uncategorized",
         size: scan.size || null,
         unit: scan.unit || null,
         price: scan.price,
@@ -480,6 +480,49 @@ async function findProduct(barcode) {
     if (!db) return null;
     const product = await requestPromise(db.transaction("products", "readonly").objectStore("products").get(String(barcode).trim()));
     return product ? normalizeProduct(product) : null;
+}
+
+async function cacheProduct(product) {
+    await dbReady;
+    if (!db) throw new Error("Local database unavailable");
+    const transaction = db.transaction("products", "readwrite");
+    const store = transaction.objectStore("products");
+    const existing = await requestPromise(store.get(product.barcode));
+    const cached = normalizeProduct({ ...(existing || {}), ...product });
+    store.put(cached);
+    await transactionPromise(transaction);
+    broadcast("data-updated");
+    return cached;
+}
+
+async function findProductAnywhere(barcode) {
+    const lookup = window.smartCartScannerCore?.lookupProductAnywhere;
+    if (!lookup) {
+        const local = await findProduct(barcode);
+        return local ? { ...local, lookupSource: "Local" } : null;
+    }
+
+    const supabase = window.smartCartSupabase?.client;
+    const result = await lookup(barcode, {
+        findLocal: findProduct,
+        canUseCloud: () => Boolean(window.smartCartSupabase?.configured && supabase && navigator.onLine && authSession),
+        findCloud: async (exactBarcode) => {
+            const { data, error } = await supabase
+                .from("products")
+                .select("barcode,name,brand,category,size,unit,last_price,last_retailer,last_branch,last_price_at,created_at,updated_at")
+                .eq("barcode", exactBarcode)
+                .maybeSingle();
+            if (error) throw error;
+            return data;
+        },
+        cacheLocal: cacheProduct
+    });
+
+    if (result.error && Date.now() - lastCloudLookupNoticeAt > 30000) {
+        lastCloudLookupNoticeAt = Date.now();
+        showToast("Cloud lookup unavailable — continuing with local scanning", "warning");
+    }
+    return result.product ? { ...result.product, lookupSource: result.source } : null;
 }
 
 async function updateProductPrice(barcode, price, details = {}) {
@@ -798,6 +841,7 @@ window.smartCart = {
     dbReady,
     addProduct,
     findProduct,
+    findProductAnywhere,
     saveLocalScan,
     saveAndSyncScan,
     syncPendingScans,

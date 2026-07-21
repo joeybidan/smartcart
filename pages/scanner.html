@@ -20,7 +20,7 @@
         <section class="page-heading">
             <p class="eyebrow">Field collection</p>
             <h1>Barcode scanner</h1>
-            <p class="muted">Keep scanning continuously. Every saved record is written locally before cloud synchronization.</p>
+            <p class="muted">Hold each barcode steady for two matching reads. Saves are written locally before cloud synchronization.</p>
         </section>
 
         <section class="card scanner-card">
@@ -42,32 +42,90 @@
         <section class="card" aria-live="polite">
             <h2>Last scan</h2>
             <p id="scanResult" class="scan-result">No barcode scanned yet.</p>
+            <details class="diagnostics">
+                <summary>Barcode diagnostics</summary>
+                <dl class="diagnostic-grid">
+                    <div><dt>Candidate</dt><dd id="diagnosticCandidate">—</dd></div>
+                    <div><dt>Confirmation count</dt><dd id="diagnosticCount">0</dd></div>
+                    <div><dt>Confirmed barcode</dt><dd id="diagnosticConfirmed">—</dd></div>
+                    <div><dt>Lookup source</dt><dd id="diagnosticSource">—</dd></div>
+                </dl>
+            </details>
         </section>
 
-        <section class="card form-card" id="unknownProductCard" hidden>
-            <div class="section-heading"><div><p class="eyebrow">Unknown barcode</p><h2>Product details</h2></div><span class="sync-badge sync-badge--pending">New product</span></div>
+        <section class="card form-card entry-card" id="unknownProductCard" hidden>
+            <div class="section-heading">
+                <div><p class="eyebrow">Unknown barcode</p><h2>Quick product entry</h2></div>
+                <span class="sync-badge sync-badge--pending">New product</span>
+            </div>
             <form id="unknownProductForm" novalidate>
-                <label>Barcode<input id="unknownBarcode" name="barcode" class="form-input" readonly></label>
-                <div class="form-grid"><label>Product name<input id="unknownName" name="name" class="form-input" required></label><label>Brand<input id="unknownBrand" name="brand" class="form-input"></label></div>
-                <div class="form-grid"><label>Category<input id="unknownCategory" name="category" class="form-input" required></label><label>Size<input id="unknownSize" name="size" class="form-input"></label></div>
-                <div class="form-grid"><label>Unit<input id="unknownUnit" name="unit" class="form-input" placeholder="e.g. pack"></label><label>Price (PHP)<input id="unknownPrice" name="price" class="form-input" type="number" min="0.01" step="0.01" inputmode="decimal" required></label></div>
-                <div class="form-grid"><label>Retailer<input id="unknownRetailer" name="retailer" class="form-input" value="KCC" required></label><label>Branch<input id="unknownBranch" name="branch" class="form-input" value="Main" required></label></div>
-                <div class="button-row"><button class="button button-primary" type="submit">Save &amp; Continue Scanning</button><button class="button button-secondary" id="unknownAddCartButton" type="button">Save &amp; Add to Cart</button><button class="button button-ghost" id="unknownCancelButton" type="button">Cancel</button></div>
+                <div class="barcode-readonly"><span>Barcode</span><code id="unknownBarcodeDisplay">—</code></div>
+                <input id="unknownBarcode" name="barcode" type="hidden">
+                <label>Product name<input id="unknownName" name="name" class="form-input" autocomplete="off" required></label>
+                <label>Price (PHP)<input id="unknownPrice" name="price" class="form-input" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+                <div class="store-row">
+                    <div><span class="field-caption">Current store</span><strong id="unknownStoreSummary">KCC · Main</strong></div>
+                    <button class="button button-secondary" type="button" data-change-store="unknown">Change Store</button>
+                </div>
+                <input id="unknownRetailer" type="hidden" required>
+                <input id="unknownBranch" type="hidden" required>
+                <details class="form-details" id="unknownOptionalDetails">
+                    <summary>Optional product details</summary>
+                    <div class="details-body">
+                        <div class="form-grid"><label>Brand<input id="unknownBrand" class="form-input"></label><label>Category<input id="unknownCategory" class="form-input" placeholder="Uncategorized"></label></div>
+                        <div class="form-grid"><label>Size<input id="unknownSize" class="form-input"></label><label>Unit<input id="unknownUnit" class="form-input" placeholder="e.g. pack"></label></div>
+                    </div>
+                </details>
+                <label class="check-row"><input id="unknownAddToCart" type="checkbox"><span>Add to cart after saving</span></label>
+                <div class="button-row"><button class="button button-primary" type="submit">Save and Continue</button><button class="button button-ghost" id="unknownCancelButton" type="button">Cancel</button></div>
             </form>
         </section>
 
-        <section class="card form-card" id="knownProductCard" hidden>
-            <div class="section-heading"><div><p class="eyebrow">Known barcode</p><h2>Save price observation</h2></div><span class="sync-badge sync-badge--success">Known product</span></div>
+        <section class="card form-card entry-card" id="knownProductCard" hidden>
+            <div class="section-heading">
+                <div><p class="eyebrow">Known barcode</p><h2>Record current price</h2></div>
+                <span class="sync-badge sync-badge--success">Known product</span>
+            </div>
             <form id="knownProductForm" novalidate>
-                <label>Barcode<input id="knownBarcode" class="form-input" readonly></label>
-                <div class="form-grid"><label>Product name<input id="knownName" class="form-input" required></label><label>Brand<input id="knownBrand" class="form-input"></label></div>
-                <div class="form-grid"><label>Category<input id="knownCategory" class="form-input" required></label><label>Size<input id="knownSize" class="form-input"></label></div>
-                <div class="form-grid"><label>Unit<input id="knownUnit" class="form-input"></label><label>Current price (PHP)<input id="knownPrice" class="form-input" type="number" min="0.01" step="0.01" inputmode="decimal" required></label></div>
-                <div class="form-grid"><label>Retailer<input id="knownRetailer" class="form-input" required></label><label>Branch<input id="knownBranch" class="form-input" required></label></div>
-                <div class="button-row"><button class="button button-primary" type="submit">Save Price &amp; Continue</button><button class="button button-secondary" id="knownAddCartButton" type="button">Save Price &amp; Add to Cart</button><button class="button button-ghost" id="knownCancelButton" type="button">Cancel</button></div>
+                <input id="knownBarcode" type="hidden">
+                <dl class="product-summary">
+                    <div class="product-summary__name"><dt>Product</dt><dd id="knownSummaryName">—</dd></div>
+                    <div><dt>Brand</dt><dd id="knownSummaryBrand">—</dd></div>
+                    <div><dt>Category</dt><dd id="knownSummaryCategory">—</dd></div>
+                    <div><dt>Size</dt><dd id="knownSummarySize">—</dd></div>
+                    <div><dt>Barcode</dt><dd id="knownSummaryBarcode">—</dd></div>
+                </dl>
+                <label>Current price (PHP)<input id="knownPrice" class="form-input" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+                <div class="store-row">
+                    <div><span class="field-caption">Current store</span><strong id="knownStoreSummary">KCC · Main</strong></div>
+                    <button class="button button-secondary" type="button" data-change-store="known">Change Store</button>
+                </div>
+                <input id="knownRetailer" type="hidden" required>
+                <input id="knownBranch" type="hidden" required>
+                <details class="form-details" id="knownEditDetails">
+                    <summary>Edit product details</summary>
+                    <div class="details-body">
+                        <label>Product name<input id="knownName" class="form-input" required></label>
+                        <div class="form-grid"><label>Brand<input id="knownBrand" class="form-input"></label><label>Category<input id="knownCategory" class="form-input" placeholder="Uncategorized"></label></div>
+                        <div class="form-grid"><label>Size<input id="knownSize" class="form-input"></label><label>Unit<input id="knownUnit" class="form-input"></label></div>
+                    </div>
+                </details>
+                <label class="check-row"><input id="knownAddToCart" type="checkbox"><span>Add to cart after saving</span></label>
+                <div class="button-row"><button class="button button-primary" type="submit">Save Price and Continue</button><button class="button button-ghost" id="knownCancelButton" type="button">Cancel</button></div>
             </form>
         </section>
     </main>
+
+    <dialog class="store-dialog" id="storePickerDialog" aria-labelledby="storePickerTitle">
+        <form id="storePickerForm">
+            <div class="section-heading"><div><p class="eyebrow">Collection location</p><h2 id="storePickerTitle">Choose store</h2></div></div>
+            <label>Retailer<input id="storeRetailer" class="form-input" autocomplete="organization" required></label>
+            <label>Branch<input id="storeBranch" class="form-input" autocomplete="off" required></label>
+            <p class="field-caption">Recent stores</p>
+            <div class="store-presets" id="storePresets"></div>
+            <div class="button-row"><button class="button button-primary" type="submit">Use Store</button><button class="button button-ghost" id="storePickerCancel" type="button">Cancel</button></div>
+        </form>
+    </dialog>
 
     <nav class="bottom-nav" aria-label="Primary navigation">
         <a href="index.html" data-nav-page="home">⌂<span>Home</span></a><a href="scanner.html" data-nav-page="scanner">▣<span>Scan</span></a><a href="cart.html" data-nav-page="cart">🛒<span>Cart</span></a><a href="products.html" data-nav-page="products">▤<span>Products</span></a><a href="sync.html" data-nav-page="sync">☷<span>More</span></a>
@@ -77,6 +135,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.50.0"></script>
     <script src="../js/runtime-config.js"></script>
     <script src="../js/supabase-client.js"></script>
+    <script src="../js/scanner-core.js"></script>
     <script src="../js/app.js"></script>
     <script src="https://unpkg.com/@zxing/library@0.21.2"></script>
     <script src="../js/scanner.js"></script>

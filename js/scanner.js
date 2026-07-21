@@ -23,7 +23,7 @@ function setScannerButtons() {
 function supportedFormats() {
     if (!window.ZXing?.BarcodeFormat) return undefined;
     const { BarcodeFormat } = window.ZXing;
-    return [BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.EAN_13, BarcodeFormat.ITF];
+    return [BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.EAN_13, BarcodeFormat.EAN_14, BarcodeFormat.ITF].filter(Boolean);
 }
 
 async function startScanner() {

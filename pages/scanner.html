@@ -1,139 +1,84 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
 <head>
-
-<meta charset="UTF-8">
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0">
-
-<title>Barcode Scanner</title>
-
-<link rel="stylesheet"
-      href="../css/style.css">
-
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan Products · SmartCart</title>
+    <link rel="stylesheet" href="../css/style.css">
 </head>
+<body data-page="scanner">
+    <header class="topbar">
+        <a class="logo" href="index.html" aria-label="SmartCart home">
+            <span class="logo-mark">🛒</span>
+            <span class="brand-title">SmartCart</span>
+            <span class="brand-subtitle">by JoeyB</span>
+        </a>
+        <a href="cart.html" class="cart-badge" id="cartBadge" data-cart-badge>🛒 Cart (0)</a>
+    </header>
 
-<body>
+    <main class="page-shell">
+        <section class="page-heading">
+            <p class="eyebrow">Field collection</p>
+            <h1>Barcode scanner</h1>
+            <p class="muted">Keep scanning continuously. Every saved record is written locally before cloud synchronization.</p>
+        </section>
 
-<header class="topbar">
+        <section class="card scanner-card">
+            <div class="section-heading">
+                <div>
+                    <h2>Camera</h2>
+                    <p class="muted" id="scannerStatus">Ready to start.</p>
+                </div>
+                <span class="sync-badge" data-connection-state>Local-only mode</span>
+            </div>
+            <video id="scannerVideo" class="scanner-video" autoplay muted playsinline></video>
+            <div class="button-row">
+                <button class="button button-primary" id="startScannerButton" type="button">Start scanner</button>
+                <button class="button button-secondary" id="stopScannerButton" type="button" disabled>Stop</button>
+            </div>
+            <p class="hint">Supported: EAN-8, UPC-A, EAN-13, and GTIN-14.</p>
+        </section>
 
-    <a href="index.html" class="logo">
+        <section class="card" aria-live="polite">
+            <h2>Last scan</h2>
+            <p id="scanResult" class="scan-result">No barcode scanned yet.</p>
+        </section>
 
-        <div class="brand-title">
-            📷 SmartCart™
-        </div>
+        <section class="card form-card" id="unknownProductCard" hidden>
+            <div class="section-heading"><div><p class="eyebrow">Unknown barcode</p><h2>Product details</h2></div><span class="sync-badge sync-badge--pending">New product</span></div>
+            <form id="unknownProductForm" novalidate>
+                <label>Barcode<input id="unknownBarcode" name="barcode" class="form-input" readonly></label>
+                <div class="form-grid"><label>Product name<input id="unknownName" name="name" class="form-input" required></label><label>Brand<input id="unknownBrand" name="brand" class="form-input"></label></div>
+                <div class="form-grid"><label>Category<input id="unknownCategory" name="category" class="form-input" required></label><label>Size<input id="unknownSize" name="size" class="form-input"></label></div>
+                <div class="form-grid"><label>Unit<input id="unknownUnit" name="unit" class="form-input" placeholder="e.g. pack"></label><label>Price (PHP)<input id="unknownPrice" name="price" class="form-input" type="number" min="0.01" step="0.01" inputmode="decimal" required></label></div>
+                <div class="form-grid"><label>Retailer<input id="unknownRetailer" name="retailer" class="form-input" value="KCC" required></label><label>Branch<input id="unknownBranch" name="branch" class="form-input" value="Main" required></label></div>
+                <div class="button-row"><button class="button button-primary" type="submit">Save &amp; Continue Scanning</button><button class="button button-secondary" id="unknownAddCartButton" type="button">Save &amp; Add to Cart</button><button class="button button-ghost" id="unknownCancelButton" type="button">Cancel</button></div>
+            </form>
+        </section>
 
-        <div class="brand-subtitle">
-            by JoeyB™
-        </div>
+        <section class="card form-card" id="knownProductCard" hidden>
+            <div class="section-heading"><div><p class="eyebrow">Known barcode</p><h2>Save price observation</h2></div><span class="sync-badge sync-badge--success">Known product</span></div>
+            <form id="knownProductForm" novalidate>
+                <label>Barcode<input id="knownBarcode" class="form-input" readonly></label>
+                <div class="form-grid"><label>Product name<input id="knownName" class="form-input" required></label><label>Brand<input id="knownBrand" class="form-input"></label></div>
+                <div class="form-grid"><label>Category<input id="knownCategory" class="form-input" required></label><label>Size<input id="knownSize" class="form-input"></label></div>
+                <div class="form-grid"><label>Unit<input id="knownUnit" class="form-input"></label><label>Current price (PHP)<input id="knownPrice" class="form-input" type="number" min="0.01" step="0.01" inputmode="decimal" required></label></div>
+                <div class="form-grid"><label>Retailer<input id="knownRetailer" class="form-input" required></label><label>Branch<input id="knownBranch" class="form-input" required></label></div>
+                <div class="button-row"><button class="button button-primary" type="submit">Save Price &amp; Continue</button><button class="button button-secondary" id="knownAddCartButton" type="button">Save Price &amp; Add to Cart</button><button class="button button-ghost" id="knownCancelButton" type="button">Cancel</button></div>
+            </form>
+        </section>
+    </main>
 
+    <nav class="bottom-nav" aria-label="Primary navigation">
+        <a href="index.html" data-nav-page="home">⌂<span>Home</span></a><a href="scanner.html" data-nav-page="scanner">▣<span>Scan</span></a><a href="cart.html" data-nav-page="cart">🛒<span>Cart</span></a><a href="products.html" data-nav-page="products">▤<span>Products</span></a><a href="sync.html" data-nav-page="sync">☷<span>More</span></a>
+    </nav>
 
-</a>
-
-<a
-href="cart.html"
-class="cart-badge"
-id="cartBadge">
-
-🛒 Cart (0)
-
-</a>
-
-</header>
-
-<main>
-
-    <section class="card">
-
-        <h3>Barcode Scanner</h3>
-
-        <video
-            id="scannerVideo"
-            class="scanner-video"
-            autoplay
-            playsinline>
-        </video>
-
-        <button
-            class="scan-btn"
-            onclick="startScanner()">
-
-            Start Scanner
-
-        </button>
-
-    </section>
-
-<section class="card">
-
-    <h3>Last Scan</h3>
-
-    <div id="scanResult">
-
-        No barcode scanned yet
-
-    </div>
-
-</section>
-
-<section
-    class="card"
-    id="unknownProductCard"
-    style="display:none;">
-
-    <h3>Unknown Product</h3>
-
-    <input
-        id="unknownBarcode"
-        class="form-input"
-        placeholder="Barcode"
-        readonly>
-
-    <input
-        id="unknownName"
-        class="form-input"
-        placeholder="Product Name">
-
-    <input
-        id="unknownCategory"
-        class="form-input"
-        placeholder="Category">
-
-    <input
-        id="unknownPrice"
-        class="form-input"
-        type="number"
-        step="0.01"
-        placeholder="Price">
-
-    <button
-        class="scan-btn"
-        onclick="saveUnknownProduct()">
-
-        Save Product
-
-    </button>
-
-</section>
-
-</main>
-
-<footer class="footer">
-
-    Email me:
-
-    <a href="mailto:businesssjoey.bidan@gmail.com">
-        businesssjoey.bidan@gmail.com
-    </a>
-
-</footer>
-
-<script src="https://unpkg.com/@zxing/library@latest"></script>
-
-<script src="../js/app.js"></script>
-<script src="../js/scanner.js"></script>
-
+    <div data-toast role="status" aria-live="polite"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.50.0"></script>
+    <script src="../js/runtime-config.js"></script>
+    <script src="../js/supabase-client.js"></script>
+    <script src="../js/app.js"></script>
+    <script src="https://unpkg.com/@zxing/library@0.21.2"></script>
+    <script src="../js/scanner.js"></script>
 </body>
 </html>
-

@@ -2,415 +2,166 @@ let codeReader = null;
 let scannerRunning = false;
 let scanLocked = false;
 let lastBarcode = "";
-let lastScanTime = 0;
+let lastScanAt = 0;
+const RESCAN_DELAY_MS = 1100;
 
-const RESCAN_DELAY_MS = 2200;
+function setScannerMessage(message, type = "info") {
+    const result = document.getElementById("scanResult");
+    const status = document.getElementById("scannerStatus");
+    if (result) result.textContent = message;
+    if (status) status.textContent = message;
+    if (type === "error") window.smartCart?.showToast(message, "error");
+}
 
-/**
- * Starts the camera once and continuously searches for barcodes.
- */
+function setScannerButtons() {
+    const start = document.getElementById("startScannerButton");
+    const stop = document.getElementById("stopScannerButton");
+    if (start) { start.disabled = scannerRunning; start.textContent = scannerRunning ? "Scanning…" : "Start scanner"; }
+    if (stop) stop.disabled = !scannerRunning;
+}
+
+function supportedFormats() {
+    if (!window.ZXing?.BarcodeFormat) return undefined;
+    const { BarcodeFormat } = window.ZXing;
+    return [BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.EAN_13, BarcodeFormat.EAN_14, BarcodeFormat.ITF].filter(Boolean);
+}
+
 async function startScanner() {
-    if (scannerRunning) {
-        updateScanResult("Scanner is already running. Point the camera at a barcode.");
-        return;
-    }
-
-    const videoElement = document.getElementById("scannerVideo");
-
-    if (!videoElement) {
-        console.error("scannerVideo element was not found.");
-        return;
-    }
-
-    if (typeof ZXing === "undefined") {
-        updateScanResult("Scanner library failed to load. Check your internet connection.");
-        console.error("ZXing is not available.");
-        return;
-    }
-
-    codeReader = new ZXing.BrowserMultiFormatReader();
-    scannerRunning = true;
-    scanLocked = false;
-
-    setScannerButtonState(true);
-    updateScanResult("Scanning… Keep the barcode clear, flat, and inside the camera view.");
-
+    if (scannerRunning) return;
+    if (!window.ZXing?.BrowserMultiFormatReader) { setScannerMessage("Scanner library unavailable. You can still enter products from the Products page.", "error"); return; }
+    const video = document.getElementById("scannerVideo");
+    if (!video) return;
     try {
-        await codeReader.decodeFromVideoDevice(
-            null,
-            "scannerVideo",
-            async (result, error) => {
-                if (result && result.text) {
-                    const barcode = String(result.text).trim();
-                    const now = Date.now();
-
-                    // Prevent the same barcode from firing repeatedly
-                    // while it remains in front of the camera.
-                    if (
-                        scanLocked ||
-                        (barcode === lastBarcode &&
-                            now - lastScanTime < RESCAN_DELAY_MS)
-                    ) {
-                        return;
-                    }
-
-                    scanLocked = true;
-                    lastBarcode = barcode;
-                    lastScanTime = now;
-
-                    await barcodeFound(barcode);
-                    return;
-                }
-
-                /*
-                 * ZXing reports NotFoundException repeatedly while checking
-                 * frames that do not contain a readable barcode.
-                 * That is normal and should not be displayed as an app error.
-                 */
-                if (
-                    error &&
-                    !(error instanceof ZXing.NotFoundException)
-                ) {
-                    console.warn("Scanner frame warning:", error);
-                }
-            }
-        );
-    } catch (error) {
-        console.error("Unable to start scanner:", error);
-
-        scannerRunning = false;
-        scanLocked = false;
-        setScannerButtonState(false);
-
-        updateScanResult(
-            "Camera could not start. Allow camera permission, then press Start Scanner again."
-        );
-    }
-}
-
-/**
- * Handles a successfully decoded barcode.
- */
-async function barcodeFound(barcode) {
-
-        barcode = String(barcode).trim();
-
-    const validGroceryBarcode =
-        /^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(barcode);
-
-    if (!validGroceryBarcode) {
-        updateScanResult(
-            `Incomplete barcode detected: ${barcode}. Hold the full barcode steady and try again.`
-        );
-
-        releaseScannerLock();
-        return;
-    }
-    
-    updateScanResult(`Barcode detected: ${barcode}`);
-
-    giveScanFeedback();
-
-    try {
-        const product = await findProduct(barcode);
-
-        if (product) {
-            await handleKnownProduct(product, barcode);
-            return;
-        }
-
-        showUnknownProductForm(barcode);
-    } catch (error) {
-        console.error("Barcode lookup failed:", error);
-
-        updateScanResult(
-            "The barcode was detected, but SmartCart could not check the product database."
-        );
-
-        releaseScannerLock();
-    }
-}
-
-/**
- * Handles a barcode already found in the product database.
- */
-async function handleKnownProduct(product, barcode) {
-    const price = Number(product.lastPrice);
-
-    if (!Number.isFinite(price)) {
-        updateScanResult(
-            `${product.name || "Product"} has an invalid stored price. Edit the product before adding it.`
-        );
-
-        releaseScannerLock();
-        return;
-    }
-
-    const shouldAdd = window.confirm(
-        [
-            "Product Found",
-            "",
-            `Name: ${product.name}`,
-            `Category: ${product.category || "Uncategorized"}`,
-            `Price: $${price.toFixed(2)}`,
-            "",
-            "Add this product to the cart?"
-        ].join("\n")
-    );
-
-    if (!shouldAdd) {
-        updateScanResult(
-            `${product.name} was recognized but was not added. Continue scanning.`
-        );
-
-        releaseScannerLock();
-        return;
-    }
-
-    try {
-        await addToCart(barcode);
-
-        if (typeof updateCartBadge === "function") {
-            await updateCartBadge();
-        }
-
-        if (typeof updateHomeDashboard === "function") {
-            await updateHomeDashboard();
-        }
-
-        updateScanResult(
-            `✅ ${product.name} added to cart — $${price.toFixed(2)}`
-        );
-
-        showScannerToast(
-            `🛒 ${product.name} added to cart`
-        );
-    } catch (error) {
-        console.error("Could not add scanned product:", error);
-
-        updateScanResult(
-            `${product.name} was found, but it could not be added to the cart.`
-        );
-    }
-
-    releaseScannerLock();
-}
-
-/**
- * Shows the form for a barcode that does not exist yet.
- */
-function showUnknownProductForm(barcode) {
-    const card = document.getElementById("unknownProductCard");
-    const barcodeInput = document.getElementById("unknownBarcode");
-    const nameInput = document.getElementById("unknownName");
-    const categoryInput = document.getElementById("unknownCategory");
-    const priceInput = document.getElementById("unknownPrice");
-
-    if (!card || !barcodeInput) {
-        console.error("Unknown Product form is missing from scanner.html.");
-
-        updateScanResult(
-            `Unknown barcode detected: ${barcode}. The product form could not be opened.`
-        );
-
-        releaseScannerLock();
-        return;
-    }
-
-    barcodeInput.value = barcode;
-
-    if (nameInput) nameInput.value = "";
-    if (categoryInput) categoryInput.value = "";
-    if (priceInput) priceInput.value = "";
-
-    card.style.display = "block";
-
-    updateScanResult(
-        `Unknown barcode: ${barcode}. Complete the product information below.`
-    );
-
-    card.scrollIntoView({
-        behavior: "smooth",
-        block: "center"
-    });
-
-    setTimeout(() => {
-        nameInput?.focus();
-    }, 350);
-
-    /*
-     * Keep scanLocked = true while the form is open.
-     * This prevents another barcode from interrupting data entry.
-     */
-}
-
-/**
- * Saves an unknown product and adds it to the cart.
- * This function is called by scanner.html.
- */
-async function saveUnknownProduct() {
-    const barcodeInput = document.getElementById("unknownBarcode");
-    const nameInput = document.getElementById("unknownName");
-    const categoryInput = document.getElementById("unknownCategory");
-    const priceInput = document.getElementById("unknownPrice");
-    const card = document.getElementById("unknownProductCard");
-
-    const barcode = barcodeInput?.value.trim() || "";
-    const name = nameInput?.value.trim() || "";
-    const category = categoryInput?.value.trim() || "";
-    const price = Number.parseFloat(priceInput?.value || "");
-
-    if (!barcode || !name || !category || !Number.isFinite(price) || price <= 0) {
-        updateScanResult(
-            "Please enter a product name, category, and a valid price greater than zero."
-        );
-
-        showScannerToast("⚠️ Complete all product fields");
-        return;
-    }
-
-    try {
-        const existingProduct = await findProduct(barcode);
-
-        if (existingProduct) {
-            updateScanResult(
-                `${existingProduct.name} already uses barcode ${barcode}.`
-            );
-
-            showScannerToast("⚠️ Barcode already exists");
-            return;
-        }
-
-        await addProduct({
-            barcode,
-            name,
-            category,
-            lastPrice: price
+        const hints = new Map();
+        const formats = supportedFormats();
+        if (formats && window.ZXing.DecodeHintType) hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+        codeReader = new window.ZXing.BrowserMultiFormatReader(hints, 250);
+        scannerRunning = true;
+        setScannerButtons();
+        setScannerMessage("Point the camera at a barcode.");
+        await codeReader.decodeFromVideoDevice(null, video, (result, error) => {
+            if (result) void handleBarcode(result.getText());
+            else if (error && !isNotFoundError(error)) return;
         });
-
-        await addToCart(barcode);
-
-        if (typeof updateCartBadge === "function") {
-            await updateCartBadge();
-        }
-
-        if (typeof updateHomeDashboard === "function") {
-            await updateHomeDashboard();
-        }
-
-        if (card) {
-            card.style.display = "none";
-        }
-
-        updateScanResult(
-            `✅ ${name} saved and added to cart — $${price.toFixed(2)}`
-        );
-
-        showScannerToast(
-            `✅ ${name} saved and added`
-        );
-
-        lastBarcode = barcode;
-        lastScanTime = Date.now();
-
-        releaseScannerLock();
     } catch (error) {
-        console.error("Unable to save unknown product:", error);
-
-        updateScanResult(
-            "SmartCart could not save this product. Check the console for details."
-        );
+        scannerRunning = false;
+        setScannerButtons();
+        const message = error?.name === "NotAllowedError" ? "Camera permission denied. Allow camera access or use manual entry." : "The camera could not start. Check browser permissions and try again.";
+        setScannerMessage(message, "error");
     }
 }
 
-/**
- * Unlocks the scanner after a short delay so the same barcode
- * is not immediately read several times.
- */
-function releaseScannerLock() {
-    window.setTimeout(() => {
-        scanLocked = false;
-
-        if (scannerRunning) {
-            updateScanResult(
-                "Ready for the next barcode."
-            );
-        }
-    }, RESCAN_DELAY_MS);
+function isNotFoundError(error) {
+    return error?.name === "NotFoundException" || String(error?.message || "").toLowerCase().includes("not found");
 }
 
-/**
- * Stops the scanner and releases the camera.
- */
 function stopScanner() {
-    if (codeReader) {
-        codeReader.reset();
-        codeReader = null;
-    }
-
+    try { codeReader?.reset(); } catch (error) { console.warn("Scanner reset skipped", error); }
+    codeReader = null;
     scannerRunning = false;
     scanLocked = false;
-
-    setScannerButtonState(false);
-    updateScanResult("Scanner stopped.");
+    setScannerButtons();
+    setScannerMessage("Scanner stopped.");
 }
 
-/**
- * Updates the Last Scan area.
- */
-function updateScanResult(message) {
-    const resultElement = document.getElementById("scanResult");
+function releaseScannerLock() {
+    window.setTimeout(() => { scanLocked = false; }, RESCAN_DELAY_MS);
+}
 
-    if (resultElement) {
-        resultElement.textContent = message;
+async function handleBarcode(rawBarcode) {
+    const barcode = window.smartCart?.validateBarcode(rawBarcode);
+    if (!barcode) { setScannerMessage("Invalid or incomplete barcode. Supported lengths are 8, 12, 13, and 14 digits.", "error"); releaseScannerLock(); return; }
+    if (scanLocked || (barcode === lastBarcode && Date.now() - lastScanAt < RESCAN_DELAY_MS)) return;
+    scanLocked = true;
+    lastBarcode = barcode;
+    lastScanAt = Date.now();
+    if (navigator.vibrate) navigator.vibrate(90);
+    setScannerMessage(`Barcode detected: ${barcode}`);
+    try {
+        const product = await window.smartCart.findProduct(barcode);
+        if (product) showKnownProductForm(product, barcode);
+        else showUnknownProductForm(barcode);
+    } catch (error) {
+        console.warn("Local barcode lookup failed", error);
+        setScannerMessage("The barcode was detected, but local lookup failed.", "error");
+        releaseScannerLock();
     }
 }
 
-/**
- * Disables the Start button while the scanner is running.
- */
-function setScannerButtonState(isRunning) {
-    const button = document.querySelector(
-        'button[onclick="startScanner()"]'
-    );
-
-    if (!button) return;
-
-    button.disabled = isRunning;
-    button.textContent = isRunning
-        ? "Scanning…"
-        : "Start Scanner";
+function showUnknownProductForm(barcode) {
+    hideForm("knownProductCard");
+    const card = document.getElementById("unknownProductCard");
+    if (!card) return;
+    card.hidden = false;
+    document.getElementById("unknownBarcode").value = barcode;
+    ["unknownName", "unknownBrand", "unknownCategory", "unknownSize", "unknownUnit", "unknownPrice"].forEach((id) => { document.getElementById(id).value = ""; });
+    document.getElementById("unknownRetailer").value = "KCC";
+    document.getElementById("unknownBranch").value = "Main";
+    setScannerMessage(`Unknown product ${barcode}. Complete the details before saving.`);
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => document.getElementById("unknownName")?.focus(), 250);
 }
 
-/**
- * Provides phone feedback after a successful decode.
- */
-function giveScanFeedback() {
-    if ("vibrate" in navigator) {
-        navigator.vibrate(120);
+function showKnownProductForm(product, barcode) {
+    hideForm("unknownProductCard");
+    const card = document.getElementById("knownProductCard");
+    if (!card) return;
+    card.hidden = false;
+    document.getElementById("knownBarcode").value = barcode;
+    document.getElementById("knownName").value = product.name || "";
+    document.getElementById("knownBrand").value = product.brand || "";
+    document.getElementById("knownCategory").value = product.category || "";
+    document.getElementById("knownSize").value = product.size || "";
+    document.getElementById("knownUnit").value = product.unit || "";
+    document.getElementById("knownPrice").value = Number.isFinite(product.lastPrice) ? product.lastPrice : "";
+    document.getElementById("knownRetailer").value = product.lastRetailer || "KCC";
+    document.getElementById("knownBranch").value = product.lastBranch || "Main";
+    setScannerMessage(`${product.name} is known. Save a new price observation or cancel.`);
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function hideForm(id) { const card = document.getElementById(id); if (card) card.hidden = true; }
+function resetScannerForms() { hideForm("unknownProductCard"); hideForm("knownProductCard"); }
+
+function formValues(prefix) {
+    return {
+        barcode: document.getElementById(`${prefix}Barcode`).value.trim(),
+        name: document.getElementById(`${prefix}Name`).value.trim(),
+        brand: document.getElementById(`${prefix}Brand`).value.trim(),
+        category: document.getElementById(`${prefix}Category`).value.trim(),
+        size: document.getElementById(`${prefix}Size`).value.trim(),
+        unit: document.getElementById(`${prefix}Unit`).value.trim(),
+        price: Number(document.getElementById(`${prefix}Price`).value),
+        retailer: document.getElementById(`${prefix}Retailer`).value.trim(),
+        branch: document.getElementById(`${prefix}Branch`).value.trim(),
+        capturedAt: new Date().toISOString(),
+        source: "scanner"
+    };
+}
+
+async function saveScannerForm(prefix, addToCart) {
+    const values = formValues(prefix);
+    const check = window.smartCart.validateScan(values);
+    if (!check.valid) { setScannerMessage(check.errors.join(" "), "error"); return; }
+    try {
+        const saved = await window.smartCart.saveAndSyncScan(values, addToCart);
+        setScannerMessage(saved.syncStatus === "synced" ? "Saved to cloud. Ready for the next barcode." : "Saved locally. Synchronization is pending; ready for the next barcode.");
+        resetScannerForms();
+        releaseScannerLock();
+    } catch (error) {
+        setScannerMessage(error.message || "Record could not be saved locally.", "error");
     }
 }
 
-/**
- * Uses the existing toast if scanner.html has one.
- * Otherwise it temporarily displays the message in Last Scan.
- */
-function showScannerToast(message) {
-    const toast = document.getElementById("toast");
+document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("startScannerButton")?.addEventListener("click", () => { void startScanner(); });
+    document.getElementById("stopScannerButton")?.addEventListener("click", stopScanner);
+    document.getElementById("unknownProductForm")?.addEventListener("submit", (event) => { event.preventDefault(); void saveScannerForm("unknown", false); });
+    document.getElementById("unknownAddCartButton")?.addEventListener("click", () => { void saveScannerForm("unknown", true); });
+    document.getElementById("unknownCancelButton")?.addEventListener("click", () => { resetScannerForms(); setScannerMessage("Cancelled. Ready for the next barcode."); releaseScannerLock(); });
+    document.getElementById("knownProductForm")?.addEventListener("submit", (event) => { event.preventDefault(); void saveScannerForm("known", false); });
+    document.getElementById("knownAddCartButton")?.addEventListener("click", () => { void saveScannerForm("known", true); });
+    document.getElementById("knownCancelButton")?.addEventListener("click", () => { resetScannerForms(); setScannerMessage("Cancelled. Ready for the next barcode."); releaseScannerLock(); });
+});
 
-    if (!toast) {
-        return;
-    }
-
-    toast.textContent = message;
-    toast.classList.add("show");
-
-    window.setTimeout(() => {
-        toast.classList.remove("show");
-    }, 2200);
-}
-
-/**
- * Release the camera when leaving the scanner page.
- */
 window.addEventListener("beforeunload", stopScanner);

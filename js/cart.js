@@ -1,235 +1,38 @@
-window.addEventListener(
-    "load",
-    loadCart
-);
-
-function loadCart(){
-
-    getCartItems()
-    .then(items => {
-
-        const container =
-            document.getElementById(
-                "cartItems"
-            );
-
-        const totalElement =
-            document.getElementById(
-                "cartTotal"
-            );
-
-        container.innerHTML = "";
-
-
-
-        if(items.length===0){
-
-container.innerHTML=`
-
-<div style="text-align:center;padding:50px;color:#999;">
-
-🛒
-
-<h3>Your cart is empty</h3>
-
-<p>Add products to begin shopping.</p>
-
-</div>
-
-`;
-
-totalElement.textContent="0.00";
-
-return;
-
+async function loadCart() {
+    try {
+        await smartCart.dbReady;
+        const items = await smartCart.getCartItems();
+        const container = document.getElementById("cartItems");
+        const totalElement = document.getElementById("cartTotal");
+        const summary = document.getElementById("cartSummary");
+        const total = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+        if (summary) summary.textContent = `${items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)} item(s)`;
+        if (totalElement) totalElement.textContent = smartCart.formatPHP(total);
+        if (!items.length) { container.className = "empty-state"; container.textContent = "Your cart is empty. Scan or add a local product to begin."; return; }
+        container.className = "";
+        container.innerHTML = items.map((item) => `<article class="cart-item"><div><div class="cart-name">${smartCart.escapeHtml(item.name)}</div><div class="cart-meta">Unit: ${smartCart.formatPHP(item.price)} · Subtotal: ${smartCart.formatPHP((Number(item.price) || 0) * (Number(item.quantity) || 0))}</div><div class="cart-controls"><button class="qty-btn" data-action="decrease" data-id="${item.id}" type="button" aria-label="Decrease quantity">−</button><span class="qty-number">${item.quantity}</span><button class="qty-btn" data-action="increase" data-id="${item.id}" type="button" aria-label="Increase quantity">+</button></div></div><button class="remove-btn" data-action="remove" data-id="${item.id}" type="button">Remove</button></article>`).join("");
+    } catch (error) { console.warn("Cart could not load", error); }
 }
 
-        let total = 0;
-
-        items.forEach(item => {
-
-            total +=
-                item.price *
-                item.quantity;
-
-            container.innerHTML += `
-
-<div class="cart-item">
-
-    <div>
-
-        <div class="cart-name">
-
-            ${item.name}
-
-        </div>
-
-        <div>
-
-            Unit:
-            $${item.price}
-
-        </div>
-
-        <div>
-
-            Subtotal:
-
-            $${
-
-                (
-                    item.price *
-                    item.quantity
-                ).toFixed(2)
-
-            }
-
-        </div>
-
-    </div>
-
-
-    
-
-
-
-    <div class="cart-controls">
-
-    <button
-        class="qty-btn"
-        onclick="decreaseItem(${item.id})">
-
-        −
-
-    </button>
-
-    <span class="qty-number">
-
-        ${item.quantity}
-
-    </span>
-
-    <button
-        class="qty-btn"
-        onclick="increaseItem(${item.id})">
-
-        +
-
-    </button>
-
-</div>
-
-<br>
-
-<button
-    class="remove-btn"
-    onclick="removeCartItem(${item.id})">
-
-    🗑 Remove
-
-</button>
-
-</div>
-
-`;
-        });
-
-        totalElement.textContent =
-            total.toFixed(2);
-
-    });
+async function handleCartAction(event) {
+    const button = event.target.closest("[data-action]");
+    if (!button) return;
+    try {
+        if (button.dataset.action === "remove") await smartCart.deleteCartItem(button.dataset.id);
+        if (button.dataset.action === "increase") await smartCart.increaseCartQuantity(button.dataset.id);
+        if (button.dataset.action === "decrease") await smartCart.decreaseCartQuantity(button.dataset.id);
+        await loadCart(); await smartCart.updateCartBadge(); await smartCart.updateHomeDashboard();
+    } catch (error) { smartCart.showToast(error.message || "Cart update failed", "error"); }
 }
 
-
-function removeCartItem(id){
-
-    const removeButton = document.querySelector(
-        `button[onclick="removeCartItem(${id})"]`
-    );
-
-    const card = removeButton
-        ? removeButton.closest(".cart-item")
-        : null;
-
-    if(card){
-
-        card.style.opacity = ".35";
-        card.style.transform = "translateX(40px)";
-    }
-
-    setTimeout(() => {
-
-        deleteCartItem(id);
-
-        setTimeout(() => {
-
-            loadCart();
-
-            updateCartBadge();
-
-        },100);
-
-    },250);
-
+async function emptyCart() {
+    if (!await smartCart.confirmAction("Remove all items from the current cart?", "Empty cart")) return;
+    await smartCart.clearCart(); await loadCart(); await smartCart.updateCartBadge(); await smartCart.updateHomeDashboard(); smartCart.showToast("Cart emptied", "success");
 }
 
-
-
-
-
-async function checkout(){
-
-    await smartCart.checkoutCart();
-
-}
-
-function increaseItem(id){
-
-    smartCart
-    .increaseCartQuantity(id);
-
-    setTimeout(() => {
-
-        loadCart();
-
-        updateCartBadge();
-
-    },150);
-}
-
-function decreaseItem(id){
-
-    smartCart
-    .decreaseCartQuantity(id);
-
-    setTimeout(() => {
-
-        loadCart();
-
-        updateCartBadge();
-
-    },150);
-}
-
-function emptyCart(){
-
-    if(
-        !confirm(
-            "Clear cart?"
-        )
-    ) return;
-
-    smartCart.clearCart();
-
-    setTimeout(() => {
-
-        loadCart();
-
-        updateCartBadge();
-
-    },150);
-}
-
-
-
-
+document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("cartItems")?.addEventListener("click", (event) => { void handleCartAction(event); });
+    document.getElementById("checkoutButton")?.addEventListener("click", () => { void smartCart.checkoutCart().then(loadCart); });
+    document.getElementById("emptyCartButton")?.addEventListener("click", () => { void emptyCart(); });
+    void loadCart();
+});

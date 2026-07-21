@@ -1,60 +1,10 @@
-<!DOCTYPE html>
-<html>
-<head>
-
-<title>Trip History</title>
-
-<link rel="stylesheet"
-href="../css/style.css">
-
-</head>
-
-<body>
-
-<header class="topbar">
-
-<a href="index.html" class="logo">
-
-<div class="brand-title">
-🛒 SmartCart™
-</div>
-
-<div class="brand-subtitle">
-by JoeyB™
-</div>
-
-</a>
-
-<a
-href="cart.html"
-class="cart-badge"
-id="cartBadge">
-
-🛒 Cart (0)
-
-</a>
-
-</header>
-
-
-<div class="container">
-
-<div class="card">
-
-<h3>Trip History</h3>
-
-<div id="tripList">
-
-Loading...
-
-</div>
-
-</div>
-
-</div>
-
-<script src="../js/app.js"></script>
-<script src="../js/trip-history.js"></script>
-
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Trip history · SmartCart</title><link rel="stylesheet" href="../css/style.css"></head>
+<body data-page="trips">
+    <header class="topbar"><a class="logo" href="index.html" aria-label="SmartCart home"><span class="logo-mark">🛒</span><span class="brand-title">SmartCart</span><span class="brand-subtitle">by JoeyB</span></a><a href="cart.html" class="cart-badge" id="cartBadge" data-cart-badge>🛒 Cart (0)</a></header>
+    <main class="page-shell"><section class="page-heading"><p class="eyebrow">Local history</p><h1>Trip history</h1><p class="muted">Completed carts are stored locally on this device.</p></section><section class="card"><div id="tripList" class="empty-state">Loading trips…</div></section></main>
+    <nav class="bottom-nav" aria-label="Primary navigation"><a href="index.html" data-nav-page="home">⌂<span>Home</span></a><a href="scanner.html" data-nav-page="scanner">▣<span>Scan</span></a><a href="cart.html" data-nav-page="cart">🛒<span>Cart</span></a><a href="products.html" data-nav-page="products">▤<span>Products</span></a><a href="sync.html" data-nav-page="sync">☷<span>More</span></a></nav>
+    <div data-toast role="status" aria-live="polite"></div><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.50.0"></script><script src="../js/runtime-config.js"></script><script src="../js/supabase-client.js"></script><script src="../js/app.js"></script><script src="../js/trip-history.js"></script>
 </body>
 </html>

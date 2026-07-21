@@ -1,0 +1,16 @@
+{
+  "name": "smartcart",
+  "version": "2.0.0",
+  "private": true,
+  "description": "SmartCart offline-first grocery barcode collector",
+  "scripts": {
+    "build": "node scripts/generate-runtime-config.mjs",
+    "test": "node --check js/app.js && node --check js/scanner.js && node --check js/products.js && node --check js/cart.js && node --check js/analytics.js && node --check js/trip-history.js && node --check js/trip-details.js && node --check js/sync.js && node --check js/auth.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.50.0"
+  },
+  "engines": {
+    "node": ">=18.14.0"
+  }
+}
